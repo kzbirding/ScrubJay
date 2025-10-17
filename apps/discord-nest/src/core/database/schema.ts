@@ -8,6 +8,7 @@ import {
   boolean,
   timestamp,
   pgTable,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 
 import { timezones } from '@/shared/timezones';
@@ -111,6 +112,8 @@ export const countyTimezones = pgTable(
 export const SourceType = ['RSS', 'EBIRD', 'EMAIL'] as const;
 export const FeedFormat = ['rss', 'atom', 'unknown'] as const;
 
+
+
 // --- Sources: one per RSS/Atom feed (or eBird region, or mailbox) ---
 export const sources = pgTable(
   'source',
@@ -119,7 +122,7 @@ export const sources = pgTable(
     type: text('type', { enum: SourceType }).notNull().default('RSS'),
     url: text('url'), // For RSS/Atom
     format: text('format', { enum: FeedFormat }).notNull().default('unknown'),
-    configJson: text('config_json'), // Optional JSON config (e.g., email params)
+    config: jsonb('config'), // Optional JSON config (e.g., email params)
     etag: text('etag'),
     lastModified: text('last_modified'),
     fetchIntervalMin: integer('fetch_interval_min').notNull().default(20),
@@ -135,32 +138,32 @@ export const sources = pgTable(
 );
 
 // --- Source Items: entries (RSS/Atom posts, emails, etc.) ---
-export const sourceItems = pgTable(
-  'source_item',
-  {
-    id: text('id').primaryKey(),
-    sourceId: text('source_id')
-      .notNull()
-      .references(() => sources.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
-    guid: text('guid'),
-    canonicalLink: text('canonical_link').notNull(),
-    title: text('title'),
-    author: text('author'),
-    summary: text('summary'),
-    publishedAt: timestamp('published_at'),
-    mediaUrl: text('media_url'),
-    contentHash: text('content_hash'),
-    rawJson: text('raw_json'),
-    fetchedAt: timestamp('fetched_at')
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-  },
-  (t) => [
-    index('source_items_sourceid_published_idx').on(t.sourceId, t.publishedAt),
-    index('source_items_guid_idx').on(t.guid),
-    index('source_items_canonical_idx').on(t.canonicalLink),
-  ]
-);
+// export const sourceItems = pgTable(
+//   'source_item',
+//   {
+//     id: text('id').primaryKey(),
+//     sourceId: text('source_id')
+//       .notNull()
+//       .references(() => sources.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
+//     guid: text('guid'),
+//     canonicalLink: text('canonical_link').notNull(),
+//     title: text('title'),
+//     author: text('author'),
+//     summary: text('summary'),
+//     publishedAt: timestamp('published_at'),
+//     mediaUrl: text('media_url'),
+//     contentHash: text('content_hash'),
+//     rawJson: text('raw_json'),
+//     fetchedAt: timestamp('fetched_at')
+//       .notNull()
+//       .default(sql`CURRENT_TIMESTAMP`),
+//   },
+//   (t) => [
+//     index('source_items_sourceid_published_idx').on(t.sourceId, t.publishedAt),
+//     index('source_items_guid_idx').on(t.guid),
+//     index('source_items_canonical_idx').on(t.canonicalLink),
+//   ]
+// );
 
 export const deliveries = pgTable(
   'delivery',

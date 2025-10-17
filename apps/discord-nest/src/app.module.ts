@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { DatabaseModule } from './core/database/database.module';
 import * as Joi from "joi";
+import { ScheduleModule } from "@nestjs/schedule";
 
 const configSchema = Joi.object({
   DISCORD_TOKEN: Joi.string().required(),
@@ -11,10 +13,12 @@ const configSchema = Joi.object({
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: configSchema,
     }),
+    DatabaseModule,
   ],
   providers: [],
 })
