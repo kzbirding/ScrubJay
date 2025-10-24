@@ -8,10 +8,9 @@ import {
   boolean,
   timestamp,
   pgTable,
-  jsonb,
 } from 'drizzle-orm/pg-core';
 
-import { timezones } from '@/shared/timezones';
+import { timezones } from '@/core/timezones';
 
 export const locations = pgTable(
   'location',

@@ -1,4 +1,4 @@
-import { DatabaseModule } from "@/core/database/database.module";
+import { DatabaseModule } from "@/core/drizzle/drizzle.module";
 import { SourcesService } from "./sources.service";
 import { Module } from "@nestjs/common";
 

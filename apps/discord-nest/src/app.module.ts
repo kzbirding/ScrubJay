@@ -1,8 +1,9 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
-import { DatabaseModule } from './core/database/database.module';
+import { DatabaseModule } from './core/drizzle/drizzle.module';
 import * as Joi from "joi";
 import { ScheduleModule } from "@nestjs/schedule";
+import { DiscordModule } from "@/core/discord/discord.module";
 
 const configSchema = Joi.object({
   DISCORD_TOKEN: Joi.string().required(),
@@ -19,6 +20,7 @@ const configSchema = Joi.object({
       validationSchema: configSchema,
     }),
     DatabaseModule,
+    DiscordModule,
   ],
   providers: [],
 })

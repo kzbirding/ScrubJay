@@ -1,4 +1,4 @@
-import { DatabaseService } from "@/core/database/database.service";
+import { DatabaseService } from "@/core/drizzle/drizzle.service";
 import { Injectable, Logger } from "@nestjs/common";
 import { EBirdSource } from "../../sources/sources.schema";
 import {
@@ -6,7 +6,7 @@ import {
   type EBirdObservation,
   type EBirdObservationWithMediaCounts,
 } from "./ebird.schema";
-import { observations, locations } from "@/core/database/schema";
+import { observations, locations } from "@/core/drizzle/drizzle.schema";
 import { sql } from "drizzle-orm";
 
 const queryParams = new URLSearchParams({

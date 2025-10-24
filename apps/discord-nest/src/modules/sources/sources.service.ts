@@ -1,5 +1,5 @@
-import { DatabaseService } from "@/core/database/database.service";
-import { SourceType, ebirdSources, sources } from "@/core/database/schema";
+import { DatabaseService } from "@/core/drizzle/drizzle.service";
+import { SourceType, ebirdSources, sources } from "@/core/drizzle/drizzle.schema";
 import { Injectable, Logger } from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 import { EBirdSource, Source } from "./sources.schema";

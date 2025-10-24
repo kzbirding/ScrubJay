@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { DatabaseModule } from '@/core/database/database.module';
+import { DatabaseModule } from '@/core/drizzle/drizzle.module';
 import { EBirdDispatchService } from './ebird/ebird.dispatch';
-import { DiscordModule } from '../discord/discord.module';
+import { DiscordModule } from '../../core/discord/discord.module';
 
 @Module({
   imports: [DatabaseModule, DiscordModule],

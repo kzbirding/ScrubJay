@@ -1,4 +1,4 @@
-import { DatabaseService } from "@/core/database/database.service";
+import { DatabaseService } from "@/core/drizzle/drizzle.service";
 import { Injectable, Logger } from "@nestjs/common";
 import { and, eq, exists, gte, not, or, sql } from "drizzle-orm";
 import {
@@ -7,8 +7,8 @@ import {
   channelEBirdSubscriptions,
   filteredSpecies,
   deliveries,
-} from "@/core/database/schema";
-import { DiscordService } from "../../discord/discord.service";
+} from "@/core/drizzle/drizzle.schema";
+import { DiscordService } from "../../../core/discord/discord.service";
 import { GroupedObservation } from "../types";
 
 @Injectable()

@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { DatabaseService } from './database.service';
+import { DatabaseService } from './drizzle.service';
 
 @Module({
   exports: [DatabaseService],

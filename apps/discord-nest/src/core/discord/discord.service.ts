@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Client, GatewayIntentBits, EmbedBuilder, TextChannel } from 'discord.js';
-import { GroupedObservation } from '../dispatch/types';
+import { GroupedObservation } from '../../modules/dispatch/types';
 
 @Injectable()
 export class DiscordService {
