@@ -13,21 +13,21 @@ export class EBirdWorkflow {
     private readonly sourcesService: SourcesService,
   ) {}
 
-  @Cron('*/1 * * * * *')
+  @Cron('*/5 * * * * *')
   async runWorkflow() {
    
     try {
       this.logger.log('Running eBird workflow');
 
-      const source = await this.sourcesService.getActiveSourcesByType('EBIRD');
-      if (!source) {
-        this.logger.error('No active eBird source found');
+      const sources = await this.sourcesService.getActiveSourcesByType('EBIRD');
+      if (!sources || sources.length === 0) {
+        this.logger.error('No active eBird sources found');
         return;
       }
 
-      this.logger.log(`Found ${source.length} active eBird sources`);
+      this.logger.log(`Found ${sources.length} active eBird sources`);
 
-      await Promise.allSettled(source.map(async (source) => {
+      await Promise.allSettled(sources.map(async (source) => {
         try {
           await this.ebirdIngestionService.ingest(source);
           this.logger.log(`Successfully ingested source ${source.id}`);
@@ -35,11 +35,17 @@ export class EBirdWorkflow {
           this.logger.error(`Error ingesting source ${source.id}: ${error}`);
         }
       }));
-      
-      // await this.ebirdDispatchService.dispatch()
+
+      try {
+        await this.ebirdDispatchService.dispatch();
+        this.logger.log('Successfully dispatched eBird data');
+      } catch (error) {
+        this.logger.error(`Error dispatching eBird data: ${error}`);
+        // Don't throw here - dispatch errors shouldn't stop the workflow
+      }
     } catch (error) {
       this.logger.error(`Error running eBird workflow: ${error}`);
-      throw error;
+      throw new Error(`Error running eBird workflow: ${error}`);
     }
   }
 }

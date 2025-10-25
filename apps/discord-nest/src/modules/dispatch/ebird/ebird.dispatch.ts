@@ -19,7 +19,22 @@ export class EBirdDispatchService {
 
   async dispatch(): Promise<Map<string, GroupedObservation[]>> {
     try {
+      // Check if there are any active channel subscriptions
+      const activeSubscriptions = await this.drizzle.db
+        .select({ channelId: channelEBirdSubscriptions.channelId })
+        .from(channelEBirdSubscriptions)
+        .where(eq(channelEBirdSubscriptions.active, true))
+        .limit(1);
+
+      this.logger.log(`Found ${activeSubscriptions.length} active subscriptions`);
+
+      if (activeSubscriptions.length === 0) {
+        this.logger.log('No active channel subscriptions found, skipping dispatch');
+        return new Map<string, GroupedObservation[]>();
+      }
+
       // Get recent observations that haven't been delivered yet
+      this.logger.log('Querying for recent observations...');
       const recentObservationsWithChannels = await this.drizzle.db
         .select({
           channelId: channelEBirdSubscriptions.channelId,
@@ -44,8 +59,8 @@ export class EBirdDispatchService {
           and(
             eq(channelEBirdSubscriptions.stateCode, locations.stateCode),
             or(
-              sql`${channelEBirdSubscriptions.countyCode} IS NULL`,
-              eq(channelEBirdSubscriptions.countyCode, locations.countyCode)
+              eq(channelEBirdSubscriptions.countyCode, '*'),
+              eq(channelEBirdSubscriptions.countyCode, locations.countyCode),
             ),
             eq(channelEBirdSubscriptions.active, true)
           )
@@ -84,7 +99,12 @@ export class EBirdDispatchService {
         .groupBy(
           channelEBirdSubscriptions.channelId,
           observations.speciesCode,
-          observations.locId
+          observations.subId,
+          observations.comName,
+          observations.locId,
+          locations.county,
+          locations.name,
+          locations.isPrivate
         );
 
       // Get confirmed species from last week
@@ -144,6 +164,13 @@ export class EBirdDispatchService {
         },
         new Map<string, GroupedObservation[]>()
       );
+
+      this.logger.log(`Dispatched ${observationsByChannel.size} channels`);
+
+      for (const [channelId, observations] of observationsByChannel.entries()) {
+        this.logger.log(`Channel ${channelId} has ${observations.length} observations to dispatch`);
+        await this.recordDeliveries(channelId, observations);
+      }
 
       return observationsByChannel;
     } catch (error) {

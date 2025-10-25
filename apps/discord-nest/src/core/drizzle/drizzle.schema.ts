@@ -73,7 +73,7 @@ export const channelEBirdSubscriptions = pgTable(
   {
     channelId: text('channel_id').notNull(),
     stateCode: text('state_code').notNull(),
-    countyCode: text('county_code'), // NULL means subscribe to all counties in state
+    countyCode: text('county_code').notNull(), // '*' means subscribe to all counties in state
     active: boolean('active').notNull().default(true),
     lastUpdated: timestamp('last_updated')
       .notNull()

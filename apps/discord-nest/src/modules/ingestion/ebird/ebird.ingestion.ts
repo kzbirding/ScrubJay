@@ -67,18 +67,36 @@ export class EBirdIngestionService {
   }
 
   private async upsertLocations(observations: EBirdObservation[]) {
-    const locationsToUpsert = observations.map((observation) => ({
-      id: observation.locId,
-      county: observation.subnational2Name,
-      countyCode: observation.subnational2Code,
-      state: observation.subnational1Name,
-      stateCode: observation.subnational1Code,
-      name: observation.locName,
-      lat: observation.lat,
-      lng: observation.lng,
-      isPrivate: observation.locationPrivate,
-      lastUpdated: new Date(),
-    }));
+    // Deduplicate locations by ID to avoid conflicts in the same batch
+    const locationMap = new Map<string, {
+      id: string;
+      county: string;
+      countyCode: string;
+      state: string;
+      stateCode: string;
+      name: string;
+      lat: number;
+      lng: number;
+      isPrivate: boolean;
+      lastUpdated: Date;
+    }>();
+
+    observations.forEach((observation) => {
+      locationMap.set(observation.locId, {
+        id: observation.locId,
+        county: observation.subnational2Name,
+        countyCode: observation.subnational2Code,
+        state: observation.subnational1Name,
+        stateCode: observation.subnational1Code,
+        name: observation.locName,
+        lat: observation.lat,
+        lng: observation.lng,
+        isPrivate: observation.locationPrivate,
+        lastUpdated: new Date(),
+      });
+    });
+
+    const locationsToUpsert = Array.from(locationMap.values());
 
     const batchSize = 100;
     for (let i = 0; i < locationsToUpsert.length; i += batchSize) {
