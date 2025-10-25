@@ -8,6 +8,7 @@ import {
   boolean,
   timestamp,
   pgTable,
+  uuid,
 } from 'drizzle-orm/pg-core';
 
 import { timezones } from '@/core/timezones';
@@ -114,7 +115,7 @@ export const SourceType = ['EBIRD'] as const;
 export const sources = pgTable(
   'source',
   {
-    id: text('id').primaryKey(), // e.g. "sandiegoregionbirding"
+    id: uuid('id').primaryKey().defaultRandom(),
     type: text('type', { enum: SourceType }).notNull(),
     fetchIntervalMin: integer('fetch_interval_min').notNull().default(20),
     active: boolean('active').notNull().default(true),
@@ -132,7 +133,7 @@ export const sources = pgTable(
 export const ebirdSources = pgTable(
   'ebird_source',
   {
-    sourceId: text('source_id')
+    sourceId: uuid('source_id')
       .primaryKey()
       .references(() => sources.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
     regionName: text('region_name').notNull(),
