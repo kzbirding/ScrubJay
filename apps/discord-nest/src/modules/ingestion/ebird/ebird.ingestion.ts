@@ -15,18 +15,22 @@ const queryParams = new URLSearchParams({
   back: "7",
 });
 
-
 @Injectable()
 export class EBirdIngestionService {
   private readonly logger = new Logger(EBirdIngestionService.name);
-  constructor(private readonly drizzle: DrizzleService, private readonly configService: ConfigService) {}
+  constructor(
+    private readonly drizzle: DrizzleService,
+    private readonly configService: ConfigService
+  ) {}
 
   private async fetchObservations(regionCode: string) {
     const url = new URL(
       `/v2/data/obs/${regionCode}/recent/notable?${queryParams.toString()}`,
       process.env.EBIRD_BASE_URL
     );
-    const response = await fetch(url.toString(), { headers: { 'X-eBirdApiKey': this.configService.get('EBIRD_TOKEN')! } });
+    const response = await fetch(url.toString(), {
+      headers: { "X-eBirdApiKey": this.configService.get("EBIRD_TOKEN")! },
+    });
     if (!response.ok) {
       throw new Error(`Failed to fetch observations: ${response.statusText}`);
     }
@@ -68,18 +72,21 @@ export class EBirdIngestionService {
 
   private async upsertLocations(observations: EBirdObservation[]) {
     // Deduplicate locations by ID to avoid conflicts in the same batch
-    const locationMap = new Map<string, {
-      id: string;
-      county: string;
-      countyCode: string;
-      state: string;
-      stateCode: string;
-      name: string;
-      lat: number;
-      lng: number;
-      isPrivate: boolean;
-      lastUpdated: Date;
-    }>();
+    const locationMap = new Map<
+      string,
+      {
+        id: string;
+        county: string;
+        countyCode: string;
+        state: string;
+        stateCode: string;
+        name: string;
+        lat: number;
+        lng: number;
+        isPrivate: boolean;
+        lastUpdated: Date;
+      }
+    >();
 
     observations.forEach((observation) => {
       locationMap.set(observation.locId, {
@@ -139,7 +146,7 @@ export class EBirdIngestionService {
       audioCount: observation.audio,
       videoCount: observation.video,
       hasComments: observation.hasComments,
-    }))
+    }));
     const batchSize = 100;
     for (let i = 0; i < obsToUpsert.length; i += batchSize) {
       const batch = obsToUpsert.slice(i, i + batchSize);
@@ -179,7 +186,6 @@ export class EBirdIngestionService {
         this.groupObservationsForInsert(rawObservations);
 
       await this.upsertObservations(groupedObservations);
-      
     } catch (error) {
       this.logger.error(
         `Error ingesting eBird data for source ${source.id}: ${error}`

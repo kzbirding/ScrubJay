@@ -262,7 +262,7 @@ app.get("/v2/data/obs/:regionCode/recent/notable", (req, res) => {
   // Generate notable observations (rarer species)
   const notableObservations: eBirdObservation[] = [];
   
-  for (let i = 0; i < Math.min(maxResultsNum, 2); i++) {
+  for (let i = 0; i < Math.min(maxResultsNum, 10); i++) {
     const hotspotData = hotspotOnly && hotspots[regionCode] 
       ? hotspots[regionCode][Math.floor(Math.random() * hotspots[regionCode].length)]
       : undefined;

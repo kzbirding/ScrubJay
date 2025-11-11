@@ -9,15 +9,18 @@ import {
   deliveries,
 } from "@/core/drizzle/drizzle.schema";
 import { GroupedObservation } from "../types";
+import { createEBirdAlertEmbed } from "./ebird.embed";
+import { DiscordHelper } from "@/modules/discord/discord.helper";
 
 @Injectable()
 export class EBirdDispatchService {
   private readonly logger = new Logger(EBirdDispatchService.name);
   constructor(
     private readonly drizzle: DrizzleService,
+    private readonly discordHelper: DiscordHelper,
   ) {}
 
-  async dispatch(): Promise<Map<string, GroupedObservation[]>> {
+  async dispatch(): Promise<number> {
     try {
       // Check if there are any active channel subscriptions
       const activeSubscriptions = await this.drizzle.db
@@ -30,7 +33,7 @@ export class EBirdDispatchService {
 
       if (activeSubscriptions.length === 0) {
         this.logger.log('No active channel subscriptions found, skipping dispatch');
-        return new Map<string, GroupedObservation[]>();
+        return 0;
       }
 
       // Get recent observations that haven't been delivered yet
@@ -62,7 +65,7 @@ export class EBirdDispatchService {
               eq(channelEBirdSubscriptions.countyCode, '*'),
               eq(channelEBirdSubscriptions.countyCode, locations.countyCode),
             ),
-            eq(channelEBirdSubscriptions.active, true)
+            eq(channelEBirdSubscriptions.active, true),
           )
         )
         .where(
@@ -165,14 +168,26 @@ export class EBirdDispatchService {
         new Map<string, GroupedObservation[]>()
       );
 
-      this.logger.log(`Dispatched ${observationsByChannel.size} channels`);
+      // Send embeds to Discord channels and track success count
+      let totalDispatched = 0;
 
       for (const [channelId, observations] of observationsByChannel.entries()) {
         this.logger.log(`Channel ${channelId} has ${observations.length} observations to dispatch`);
-        await this.recordDeliveries(channelId, observations);
+        
+        const embeds = observations.map(obs => createEBirdAlertEmbed(obs));
+        const success = await this.discordHelper.sendEmbedsToChannel(channelId, embeds);
+        
+        if (success) {
+          await this.recordDeliveries(channelId, observations);
+          totalDispatched += observations.length;
+          this.logger.log(`Successfully dispatched ${observations.length} observations to channel ${channelId}`);
+        } else {
+          this.logger.error(`Failed to send embeds to channel ${channelId}`);
+        }
       }
 
-      return observationsByChannel;
+      this.logger.log(`Total dispatched: ${totalDispatched} observations across ${observationsByChannel.size} channels`);
+      return totalDispatched;
     } catch (error) {
       this.logger.error(
         `Error dispatching eBird data: ${error}`
@@ -205,4 +220,5 @@ export class EBirdDispatchService {
       throw error;
     }
   }
+
 }
