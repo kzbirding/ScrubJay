@@ -10,20 +10,24 @@ const PORT = 8080;
 
 // In-memory storage for observations
 const observations: Record<string, eBirdObservation[]> = {};
+const notableObservations: Record<string, eBirdObservation[]> = {};
 const apiKeys = new Set(["test-api-key", "dev-key-123"]); // Simple API key storage
 
 // Pool of existing locations for reuse
-const locationPool: Record<string, { locId: string; locName: string; lat: number; lng: number }[]> = {};
+const locationPool: Record<
+  string,
+  { locId: string; locName: string; lat: number; lng: number }[]
+> = {};
 
 // Initialize location pools from hotspots data
-Object.keys(hotspots).forEach(regionCode => {
+Object.keys(hotspots).forEach((regionCode) => {
   const regionHotspots = hotspots[regionCode as keyof typeof hotspots];
   if (regionHotspots) {
-    locationPool[regionCode] = regionHotspots.map(hotspot => ({
+    locationPool[regionCode] = regionHotspots.map((hotspot) => ({
       locId: hotspot.locId,
       locName: hotspot.locName,
       lat: hotspot.lat,
-      lng: hotspot.lng
+      lng: hotspot.lng,
     }));
   }
 });
@@ -65,54 +69,65 @@ export interface eBirdObservation {
 const rateLimits: Record<string, { count: number; resetTime: number }> = {};
 
 // Middleware for API key authentication
-const authenticateApiKey = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const apiKey = req.headers['x-ebirdapikey'] as string;
+const authenticateApiKey = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
+  const apiKey = req.headers["x-ebirdapikey"] as string;
 
-  console.log('apiKey', apiKey);
-  
+  console.log("apiKey", apiKey);
+
   if (!apiKey) {
     return res.status(401).json({ error: "API key required" });
   }
-  
+
   if (!apiKeys.has(apiKey)) {
     return res.status(401).json({ error: "Invalid API key" });
   }
-  
+
   next();
 };
 
 // Rate limiting middleware
-const rateLimit = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const apiKey = req.headers['x-ebirdapikey'] as string;
+const rateLimit = (
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) => {
+  const apiKey = req.headers["x-ebirdapikey"] as string;
   const now = Date.now();
   const windowMs = 24 * 60 * 60 * 1000; // 24 hours
   const maxRequests = 10000; // eBird API limit
-  
+
   if (!rateLimits[apiKey] || now > rateLimits[apiKey].resetTime) {
     rateLimits[apiKey] = { count: 0, resetTime: now + windowMs };
   }
-  
+
   if (rateLimits[apiKey].count >= maxRequests) {
     return res.status(429).json({ error: "Rate limit exceeded" });
   }
-  
+
   rateLimits[apiKey].count++;
   next();
 };
 
-function generateRandomObservation(regionCode: string, hotspot?: { locId: string; locName: string; lat: number; lng: number }): eBirdObservation {
+function generateRandomObservation(
+  regionCode: string,
+  hotspot?: { locId: string; locName: string; lat: number; lng: number }
+): eBirdObservation {
   const region = regions[regionCode as keyof typeof regions];
   const randomSpecies = species[Math.floor(Math.random() * species.length)];
   const randomSubregion = Object.keys(region.counties)[
     Math.floor(Math.random() * Object.keys(region.counties).length)
   ];
-  
+
   if (!randomSpecies || !randomSubregion) {
     throw new Error("Unable to generate observation data");
   }
-  
+
   let hotspotData: { locId: string; locName: string; lat: number; lng: number };
-  
+
   if (hotspot) {
     // Use provided hotspot
     hotspotData = hotspot;
@@ -120,10 +135,13 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
     // 80% chance to reuse existing location, 20% chance to create new one
     const shouldReuseLocation = Math.random() < 0.8;
     const availableLocations = locationPool[regionCode] || [];
-    
+
     if (shouldReuseLocation && availableLocations.length > 0) {
       // Reuse existing location
-      const randomLocation = availableLocations[Math.floor(Math.random() * availableLocations.length)];
+      const randomLocation =
+        availableLocations[
+          Math.floor(Math.random() * availableLocations.length)
+        ];
       hotspotData = randomLocation!; // We know it exists because we checked length > 0
     } else {
       // Create new location and add to pool
@@ -133,7 +151,7 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
         lat: 37.7749 + (Math.random() - 0.5) * 0.1,
         lng: -122.4194 + (Math.random() - 0.5) * 0.1,
       };
-      
+
       // Add new location to pool for future reuse
       if (!locationPool[regionCode]) {
         locationPool[regionCode] = [];
@@ -142,8 +160,10 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
     }
   }
 
-  const obsDt = moment().subtract(Math.floor(Math.random() * 30), 'days').format('YYYY-MM-DD HH:mm:ss');
-  
+  const obsDt = moment()
+    .subtract(Math.floor(Math.random() * 30), "days")
+    .format("YYYY-MM-DD HH:mm:ss");
+
   return {
     speciesCode: randomSpecies.speciesCode,
     comName: randomSpecies.comName,
@@ -162,7 +182,8 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
     countryName: "United States",
     subnational1Code: region.code,
     subnational1Name: region.name,
-    subnational2Code: region.counties[randomSubregion as keyof typeof region.counties],
+    subnational2Code:
+      region.counties[randomSubregion as keyof typeof region.counties],
     subnational2Name: randomSubregion,
     firstName: "John",
     lastName: "Doe",
@@ -172,7 +193,10 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
     presenceNoted: true,
     hasRichMedia: Math.random() > 0.8,
     hasComments: Math.random() > 0.7,
-    evidence: Math.random() > 0.9 ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V") : null,
+    evidence:
+      Math.random() > 0.9
+        ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V")
+        : null,
     exoticsCategory: null,
     isChecklistReviewed: Math.random() > 0.2,
   };
@@ -181,7 +205,7 @@ function generateRandomObservation(regionCode: string, hotspot?: { locId: string
 app.use(express.json());
 
 // Apply authentication and rate limiting to all API routes
-app.use('/v2', authenticateApiKey, rateLimit);
+app.use("/v2", authenticateApiKey, rateLimit);
 
 app.get("/", (_req, res) => {
   res.json({
@@ -194,8 +218,8 @@ app.get("/", (_req, res) => {
       "GET /v2/ref/hotspot/{regionCode}",
       "GET /v2/ref/species/info/{speciesCode}",
       "GET /v2/data/obs/geo/recent",
-      "GET /v2/data/obs/geo/recent/notable"
-    ]
+      "GET /v2/data/obs/geo/recent/notable",
+    ],
   });
 });
 
@@ -206,7 +230,11 @@ app.get("/health", (_req, res) => {
 // Recent observations in a region
 app.get("/v2/data/obs/:regionCode/recent", (req, res) => {
   const { regionCode } = req.params;
-  const { maxResults = "50", includeProvisional = "false", hotspot = "false" } = req.query;
+  const {
+    maxResults = "50",
+    includeProvisional = "false",
+    hotspot = "false",
+  } = req.query;
 
   if (!regionCode) {
     return res.status(400).json({ error: "Region code is required" });
@@ -224,19 +252,20 @@ app.get("/v2/data/obs/:regionCode/recent", (req, res) => {
   // Generate observations
   const regionObservations = observations[regionCode] || [];
   const newObservations: eBirdObservation[] = [];
-  
+
   for (let i = 0; i < Math.min(maxResultsNum, 20); i++) {
-    const hotspotData = hotspotOnly && hotspots[regionCode] 
-      ? hotspots[regionCode][Math.floor(Math.random() * hotspots[regionCode].length)]
-      : undefined;
-    
+    const hotspotData =
+      hotspotOnly && hotspots[regionCode]
+        ? hotspots[regionCode][
+            Math.floor(Math.random() * hotspots[regionCode].length)
+          ]
+        : undefined;
+
     const obs = generateRandomObservation(regionCode, hotspotData);
     if (includeProv || obs.obsReviewed) {
       newObservations.push(obs);
     }
   }
-
-  observations[regionCode] = [...regionObservations, ...newObservations].slice(-maxResultsNum);
 
   res.json(observations[regionCode]);
 });
@@ -244,7 +273,11 @@ app.get("/v2/data/obs/:regionCode/recent", (req, res) => {
 // Notable observations in a region
 app.get("/v2/data/obs/:regionCode/recent/notable", (req, res) => {
   const { regionCode } = req.params;
-  const { maxResults = "50", includeProvisional = "false", hotspot = "false" } = req.query;
+  const {
+    maxResults = "50",
+    includeProvisional = "false",
+    hotspot = "false",
+  } = req.query;
 
   if (!regionCode) {
     return res.status(400).json({ error: "Region code is required" });
@@ -259,34 +292,55 @@ app.get("/v2/data/obs/:regionCode/recent/notable", (req, res) => {
   const includeProv = includeProvisional === "true";
   const hotspotOnly = hotspot === "true";
 
-  // Generate notable observations (rarer species)
-  const notableObservations: eBirdObservation[] = [];
-  
+  // Get previously generated notable observations
+  const existingNotable = notableObservations[regionCode] || [];
+
+  // Generate new notable observations (rarer species)
+  const newNotableObservations: eBirdObservation[] = [];
+
   for (let i = 0; i < Math.min(maxResultsNum, 10); i++) {
-    const hotspotData = hotspotOnly && hotspots[regionCode] 
-      ? hotspots[regionCode][Math.floor(Math.random() * hotspots[regionCode].length)]
-      : undefined;
-    
+    const hotspotData =
+      hotspotOnly && hotspots[regionCode]
+        ? hotspots[regionCode][
+            Math.floor(Math.random() * hotspots[regionCode].length)
+          ]
+        : undefined;
+
     const obs = generateRandomObservation(regionCode, hotspotData);
     // Make it more likely to be notable
     obs.obsReviewed = true;
-    obs.evidence = Math.random() > 0.5 ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V") : null;
-    
+    obs.evidence =
+      Math.random() > 0.5
+        ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V")
+        : null;
+
     if (includeProv || obs.obsReviewed) {
-      notableObservations.push(obs);
+      newNotableObservations.push(obs);
     }
   }
 
-  res.json(notableObservations);
+  // Combine existing and new notable observations, keeping most recent
+  notableObservations[regionCode] = [
+    ...existingNotable,
+    ...newNotableObservations,
+  ].slice(-maxResultsNum);
+
+  res.json(notableObservations[regionCode]);
 });
 
 // Recent observations for a specific species in a region
 app.get("/v2/data/obs/:regionCode/recent/:speciesCode", (req, res) => {
   const { regionCode, speciesCode } = req.params;
-  const { maxResults = "50", includeProvisional = "false", hotspot = "false" } = req.query;
+  const {
+    maxResults = "50",
+    includeProvisional = "false",
+    hotspot = "false",
+  } = req.query;
 
   if (!regionCode || !speciesCode) {
-    return res.status(400).json({ error: "Region code and species code are required" });
+    return res
+      .status(400)
+      .json({ error: "Region code and species code are required" });
   }
 
   const region = regions[regionCode as keyof typeof regions];
@@ -294,7 +348,7 @@ app.get("/v2/data/obs/:regionCode/recent/:speciesCode", (req, res) => {
     return res.status(404).json({ error: "Region not found" });
   }
 
-  const speciesData = species.find(s => s.speciesCode === speciesCode);
+  const speciesData = species.find((s) => s.speciesCode === speciesCode);
   if (!speciesData) {
     return res.status(404).json({ error: "Species not found" });
   }
@@ -305,17 +359,20 @@ app.get("/v2/data/obs/:regionCode/recent/:speciesCode", (req, res) => {
 
   // Generate observations for specific species
   const speciesObservations: eBirdObservation[] = [];
-  
+
   for (let i = 0; i < Math.min(maxResultsNum, 15); i++) {
-    const hotspotData = hotspotOnly && hotspots[regionCode] 
-      ? hotspots[regionCode][Math.floor(Math.random() * hotspots[regionCode].length)]
-      : undefined;
-    
+    const hotspotData =
+      hotspotOnly && hotspots[regionCode]
+        ? hotspots[regionCode][
+            Math.floor(Math.random() * hotspots[regionCode].length)
+          ]
+        : undefined;
+
     const obs = generateRandomObservation(regionCode, hotspotData);
     obs.speciesCode = speciesData.speciesCode;
     obs.comName = speciesData.comName;
     obs.sciName = speciesData.sciName;
-    
+
     if (includeProv || obs.obsReviewed) {
       speciesObservations.push(obs);
     }
@@ -352,7 +409,7 @@ app.get("/v2/ref/species/info/:speciesCode", (req, res) => {
     return res.status(400).json({ error: "Species code is required" });
   }
 
-  const speciesData = species.find(s => s.speciesCode === speciesCode);
+  const speciesData = species.find((s) => s.speciesCode === speciesCode);
   if (!speciesData) {
     return res.status(404).json({ error: "Species not found" });
   }
@@ -373,16 +430,23 @@ app.get("/v2/ref/species/info/:speciesCode", (req, res) => {
     extinct: false,
     extinctYear: null,
     familyCode: "mock",
-    orderCode: "passeriformes"
+    orderCode: "passeriformes",
   });
 });
 
 // Recent observations by geographic area
 app.get("/v2/data/obs/geo/recent", (req, res) => {
-  const { lat, lng, maxResults = "50", includeProvisional = "false" } = req.query;
+  const {
+    lat,
+    lng,
+    maxResults = "50",
+    includeProvisional = "false",
+  } = req.query;
 
   if (!lat || !lng) {
-    return res.status(400).json({ error: "Latitude and longitude are required" });
+    return res
+      .status(400)
+      .json({ error: "Latitude and longitude are required" });
   }
 
   const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
@@ -390,16 +454,16 @@ app.get("/v2/data/obs/geo/recent", (req, res) => {
 
   // Generate observations near the given coordinates
   const geoObservations: eBirdObservation[] = [];
-  
+
   for (let i = 0; i < Math.min(maxResultsNum, 20); i++) {
     // Use a default region or try to determine from coordinates
     const regionCode = "US-CA"; // Default to California for now
     const obs = generateRandomObservation(regionCode);
-    
+
     // Adjust coordinates to be near the requested location
     obs.lat = parseFloat(lat as string) + (Math.random() - 0.5) * 0.1;
     obs.lng = parseFloat(lng as string) + (Math.random() - 0.5) * 0.1;
-    
+
     if (includeProv || obs.obsReviewed) {
       geoObservations.push(obs);
     }
@@ -410,10 +474,17 @@ app.get("/v2/data/obs/geo/recent", (req, res) => {
 
 // Notable observations by geographic area
 app.get("/v2/data/obs/geo/recent/notable", (req, res) => {
-  const { lat, lng, maxResults = "50", includeProvisional = "false" } = req.query;
+  const {
+    lat,
+    lng,
+    maxResults = "50",
+    includeProvisional = "false",
+  } = req.query;
 
   if (!lat || !lng) {
-    return res.status(400).json({ error: "Latitude and longitude are required" });
+    return res
+      .status(400)
+      .json({ error: "Latitude and longitude are required" });
   }
 
   const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
@@ -421,18 +492,21 @@ app.get("/v2/data/obs/geo/recent/notable", (req, res) => {
 
   // Generate notable observations near the given coordinates
   const geoNotableObservations: eBirdObservation[] = [];
-  
+
   for (let i = 0; i < Math.min(maxResultsNum, 2); i++) {
     // Use a default region or try to determine from coordinates
     const regionCode = "US-CA"; // Default to California for now
     const obs = generateRandomObservation(regionCode);
-    
+
     // Adjust coordinates to be near the requested location
     obs.lat = parseFloat(lat as string) + (Math.random() - 0.5) * 0.1;
     obs.lng = parseFloat(lng as string) + (Math.random() - 0.5) * 0.1;
     obs.obsReviewed = true;
-    obs.evidence = Math.random() > 0.5 ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V") : null;
-    
+    obs.evidence =
+      Math.random() > 0.5
+        ? (["P", "A", "V"][Math.floor(Math.random() * 3)] as "P" | "A" | "V")
+        : null;
+
     if (includeProv || obs.obsReviewed) {
       geoNotableObservations.push(obs);
     }
@@ -454,5 +528,5 @@ app.use((req: express.Request, res: express.Response) => {
 
 app.listen(PORT, () => {
   console.log(`eBird Mock API Server is running on http://localhost:${PORT}`);
-  console.log(`Available API keys: ${Array.from(apiKeys).join(', ')}`);
+  console.log(`Available API keys: ${Array.from(apiKeys).join(", ")}`);
 });

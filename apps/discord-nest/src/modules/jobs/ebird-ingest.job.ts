@@ -10,7 +10,7 @@ export class EBirdIngestJob {
 
   constructor(private readonly ebird: EBirdService) {}
 
-  @Cron("*/20 * * * *")
+  @Cron("*/15 * * * * *")
   async run() {
     this.logger.debug("Starting eBird ingestion job...");
 

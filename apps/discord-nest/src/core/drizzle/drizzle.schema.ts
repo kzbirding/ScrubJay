@@ -11,6 +11,7 @@ import {
   serial,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 
 import { timezones } from "@/core/timezones";
 
@@ -127,3 +128,14 @@ export const deliveries = pgTable(
     index("deliveries_channel_idx").on(t.channelId),
   ]
 );
+
+export const locationsRelations = relations(locations, ({ many }) => ({
+  observations: many(observations),
+}));
+
+export const observationsRelations = relations(observations, ({ one }) => ({
+  location: one(locations, {
+    fields: [observations.locId],
+    references: [locations.id],
+  }),
+}));

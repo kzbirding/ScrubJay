@@ -13,7 +13,9 @@ export class EBirdFetcher {
       `/v2/data/obs/${regionCode}/recent/notable?back=7&detail=full`,
       this.configService.getOrThrow("EBIRD_BASE_URL")
     );
-    const response = await fetch(url.toString(), {
+
+    console.log(url.toString());
+    const response = await fetch(url, {
       headers: { "X-eBirdApiKey": this.configService.get("EBIRD_TOKEN")! },
     });
     if (!response.ok) {
@@ -21,6 +23,7 @@ export class EBirdFetcher {
       return [];
     }
     const data = await response.json();
+    this.logger.log(`Fetched ${data.length} observations`);
     return data;
   }
 }

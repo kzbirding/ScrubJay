@@ -18,9 +18,9 @@ export class DeliveriesService {
       channelId
     );
     if (delivered) {
-      this.logger.debug(
-        `Already delivered ${alertKind}:${alertId} to channel ${channelId}`
-      );
+      // this.logger.debug(
+      //   `Already delivered ${alertKind}:${alertId} to channel ${channelId}`
+      // );
       return false;
     }
     return true;

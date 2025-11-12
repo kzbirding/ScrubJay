@@ -8,7 +8,7 @@ export class DispatchJob {
 
   constructor(private readonly dispatcher: DispatcherService) {}
 
-  @Cron("*/20 * * * *")
+  @Cron("*/5 * * * * *")
   async run() {
     const since = new Date(Date.now() - 15 * 60 * 1000);
     this.logger.debug(
