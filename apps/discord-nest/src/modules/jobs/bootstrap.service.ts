@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { EBirdService } from "@/modules/ebird/ebird.service";
 import { DispatcherRepository } from "@/modules/dispatcher/dispatcher.repository";
 import { DeliveriesService } from "@/modules/deliveries/deliveries.service";
+import { DispatcherService } from "../dispatcher/dispatcher.service";
 
 /**
  * Populates DB on startup without triggering any Discord messages.
@@ -15,7 +16,7 @@ export class BootstrapService implements OnModuleInit {
 
   constructor(
     private readonly ebirdService: EBirdService,
-    private readonly dispatcherRepo: DispatcherRepository,
+    private readonly dispatcherService: DispatcherService,
     private readonly deliveries: DeliveriesService
   ) {}
 
@@ -49,7 +50,7 @@ export class BootstrapService implements OnModuleInit {
     for (const obs of observations) {
       const alertId = `${obs.speciesCode}:${obs.subId}`;
       const channels =
-        await this.dispatcherRepo.getMatchingChannelsForObservation(
+        await this.dispatcherService.getMatchingChannelsForObservation(
           obs.comName,
           obs.locId
         );

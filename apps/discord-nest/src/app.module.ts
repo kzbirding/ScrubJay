@@ -5,6 +5,7 @@ import * as Joi from "joi";
 import { ScheduleModule } from "@nestjs/schedule";
 import { NecordModule } from "necord";
 import { GatewayIntentBits } from "discord.js";
+import { JobsModule } from "./modules/jobs/jobs.module";
 
 const configSchema = Joi.object({
   DISCORD_TOKEN: Joi.string().required(),
@@ -29,6 +30,7 @@ const configSchema = Joi.object({
       }),
       inject: [ConfigService],
     }),
+    JobsModule,
   ],
   providers: [],
 })

@@ -5,7 +5,7 @@ import { DrizzleModule } from "@/core/drizzle/drizzle.module";
 
 @Module({
   imports: [DrizzleModule],
-  providers: [DeliveriesRepository],
+  providers: [DeliveriesRepository, DeliveriesService],
   exports: [DeliveriesService],
 })
 export class DeliveriesModule {}

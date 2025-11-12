@@ -11,7 +11,7 @@ export class EBirdFetcher {
   async fetchRareObservations(regionCode: string): Promise<EBirdObservation[]> {
     const url = new URL(
       `/v2/data/obs/${regionCode}/recent/notable?back=7&detail=full`,
-      process.env.EBIRD_BASE_URL
+      this.configService.getOrThrow("EBIRD_BASE_URL")
     );
     const response = await fetch(url.toString(), {
       headers: { "X-eBirdApiKey": this.configService.get("EBIRD_TOKEN")! },

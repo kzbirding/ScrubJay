@@ -86,4 +86,8 @@ export class DispatcherService {
       }
     }
   }
+
+  async getMatchingChannelsForObservation(commonName: string, locId: string) {
+    return this.repo.getMatchingChannelsForObservation(commonName, locId);
+  }
 }
