@@ -134,6 +134,10 @@ export class DispatcherService {
     }
   }
 
+  async getUndeliveredObservationsSinceDate(since?: Date) {
+    return this.repo.getUndeliveredObservationsSinceDate(since);
+  }
+
   async dispatchEBirdSince(since: Date) {
     const unsentObservations =
       await this.repo.getUndeliveredObservationsSinceDate(since);

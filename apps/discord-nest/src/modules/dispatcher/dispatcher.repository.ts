@@ -29,7 +29,7 @@ export class DispatcherRepository {
       );
   }
 
-  async getUndeliveredObservationsSinceDate(since: Date) {
+  async getUndeliveredObservationsSinceDate(since?: Date) {
     return this.drizzle.db
       .select({
         channelId: channelEBirdSubscriptions.channelId,
@@ -59,7 +59,7 @@ export class DispatcherRepository {
           eq(channelEBirdSubscriptions.active, true),
           eq(channelEBirdSubscriptions.stateCode, locations.stateCode),
           or(
-            eq(channelEBirdSubscriptions.countyCode, locations),
+            eq(channelEBirdSubscriptions.countyCode, locations.countyCode),
             eq(channelEBirdSubscriptions.countyCode, "*")
           )
         )
@@ -84,7 +84,7 @@ export class DispatcherRepository {
       )
       .where(
         and(
-          gt(observations.createdAt, since),
+          since ? gt(observations.createdAt, since) : undefined,
           isNull(filteredSpecies.channelId),
           isNull(deliveries.alertId)
         )

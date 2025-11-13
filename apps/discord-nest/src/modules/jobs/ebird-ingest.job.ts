@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { EBirdService } from "../ebird/ebird.service";
+import { BootstrapService } from "./bootstrap.service";
 
 @Injectable()
 export class EBirdIngestJob {
@@ -8,10 +9,16 @@ export class EBirdIngestJob {
 
   private readonly states = ["US-NC", "US-CA"];
 
-  constructor(private readonly ebird: EBirdService) {}
+  constructor(
+    private readonly ebird: EBirdService,
+    private readonly bootstrapService: BootstrapService
+  ) {}
 
   @Cron("*/15 * * * * *")
   async run() {
+    // Wait for bootstrap to complete before running
+    await this.bootstrapService.waitForBootstrap();
+
     this.logger.debug("Starting eBird ingestion job...");
 
     let total = 0;
