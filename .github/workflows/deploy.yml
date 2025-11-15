@@ -31,43 +31,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./apps/discord/Dockerfile
+          file: ./apps/discord-nest/Dockerfile
           push: true
           tags: ghcr.io/${{ github.actor }}/scrubjay-discord:latest
-
-      - name: Deploy to DigitalOcean
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USERNAME }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            # Store the current image ID for later removal
-            OLD_IMAGE=$(docker inspect --format='{{.Image}}' scrubjay-bot 2>/dev/null || echo "")
-
-            # Stop and remove existing container
-            docker stop scrubjay-bot || true
-            docker rm scrubjay-bot || true
-
-            # Remove the old image if it exists
-            if [ ! -z "$OLD_IMAGE" ]; then
-              docker rmi $OLD_IMAGE || true
-            fi
-
-            # Pull the latest image
-            docker pull ghcr.io/${{ github.actor }}/scrubjay-discord:latest
-
-            # Create volume if it doesn't exist
-            docker volume create scrubjay
-
-            # Run new container
-            docker run -d \
-              --name scrubjay-bot \
-              --mount type=volume,src=scrubjay,target=/etc/dbs/scrubjay \
-              -e DISCORD_TOKEN="${{ secrets.DISCORD_TOKEN }}" \
-              -e DISCORD_CLIENT_ID="${{ secrets.DISCORD_CLIENT_ID }}" \
-              -e EBIRD_TOKEN="${{ secrets.EBIRD_TOKEN }}" \
-              -e EBIRD_BASE_URL="${{ secrets.EBIRD_BASE_URL }}" \
-              -e DATABASE_URL="/etc/dbs/scrubjay/scrubjay.db" \
-              --restart unless-stopped \
-              ghcr.io/${{ github.actor }}/scrubjay-discord:latest
