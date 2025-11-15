@@ -2,16 +2,16 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { EBirdService } from "../ebird/ebird.service";
 import { BootstrapService } from "./bootstrap.service";
+import { SourcesService } from "../sources/sources.service";
 
 @Injectable()
 export class EBirdIngestJob {
   private readonly logger = new Logger(EBirdIngestJob.name);
 
-  private readonly states = ["US-NC", "US-CA"];
-
   constructor(
     private readonly ebird: EBirdService,
-    private readonly bootstrapService: BootstrapService
+    private readonly bootstrapService: BootstrapService,
+    private readonly sourcesService: SourcesService
   ) {}
 
   @Cron("*/15 * * * * *")
@@ -21,14 +21,16 @@ export class EBirdIngestJob {
 
     this.logger.debug("Starting eBird ingestion job...");
 
+    const regions = await this.sourcesService.getEBirdSources();
+
     let total = 0;
-    for (const state of this.states) {
+    for (const region of regions) {
       try {
-        const inserted = await this.ebird.ingestRegion(state);
+        const inserted = await this.ebird.ingestRegion(region);
         total += inserted;
-        this.logger.log(`State ${state}: ${inserted} alerts ingested`);
+        this.logger.log(`Region ${region}: ${inserted} alerts ingested`);
       } catch (err) {
-        this.logger.error(`Failed to ingest ${state}: ${err}`);
+        this.logger.error(`Failed to ingest ${region}: ${err}`);
       }
     }
   }
