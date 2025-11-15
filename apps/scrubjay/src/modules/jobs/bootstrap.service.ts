@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { EBirdService } from "@/modules/ebird/ebird.service";
 import { DispatcherService } from "@/modules/dispatcher/dispatcher.service";
 import { DeliveriesService } from "@/modules/deliveries/deliveries.service";
+import { SourcesService } from "../sources/sources.service";
 
 /**
  * Populates DB on startup without triggering any Discord messages.
@@ -11,7 +12,6 @@ import { DeliveriesService } from "@/modules/deliveries/deliveries.service";
 export class BootstrapService implements OnModuleInit {
   private readonly logger = new Logger(BootstrapService.name);
 
-  private readonly states = ["US-NC", "US-CA"];
   private readonly initDate = new Date();
   private bootstrapComplete = false;
   private bootstrapPromise: Promise<void> | null = null;
@@ -19,7 +19,8 @@ export class BootstrapService implements OnModuleInit {
   constructor(
     private readonly ebirdService: EBirdService,
     private readonly dispatcherService: DispatcherService,
-    private readonly deliveries: DeliveriesService
+    private readonly deliveries: DeliveriesService,
+    private readonly sources: SourcesService
   ) {}
 
   /**
@@ -64,13 +65,15 @@ export class BootstrapService implements OnModuleInit {
   async onModuleInit() {
     this.logger.log("Running startup population job...");
 
+    const regions = await this.sources.getEBirdSources();
+
     try {
-      for (const state of this.states) {
+      for (const region of regions) {
         try {
-          const count = await this.ebirdService.ingestRegion(state);
-          this.logger.log(`Populated ${count} observations for ${state}`);
+          const count = await this.ebirdService.ingestRegion(region);
+          this.logger.log(`Populated ${count} observations for ${region}`);
         } catch (err) {
-          this.logger.error(`Population failed for ${state}: ${err}`);
+          this.logger.error(`Population failed for ${region}: ${err}`);
         }
       }
 

@@ -14,7 +14,6 @@ export class EBirdFetcher {
       this.configService.getOrThrow("EBIRD_BASE_URL")
     );
 
-    console.log(url.toString());
     const response = await fetch(url, {
       headers: { "X-eBirdApiKey": this.configService.get("EBIRD_TOKEN")! },
     });
