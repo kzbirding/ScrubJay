@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { type Client, Events, PartialMessage } from "discord.js";
+import { Events } from "discord.js";
 import { Context, type ContextOf, On } from "necord";
 import type { ReactionRouter } from "../reaction-router/reaction-router.service";
 
@@ -10,7 +10,7 @@ export class ReactionListener {
 
   @On(Events.MessageReactionAdd)
   async onReactionAdd(
-    @Context() [reaction, user]: ContextOf<Events.MessageReactionAdd>
+    @Context() [reaction, user]: ContextOf<Events.MessageReactionAdd>,
   ) {
     if (user.bot) return; // ignore any bot
 
@@ -18,7 +18,7 @@ export class ReactionListener {
       try {
         reaction = await reaction.fetch();
       } catch (error) {
-        this.logger.error(`Something went wrong when fetching the reaction.`);
+        this.logger.error(`Error fetching reaction: ${error}`);
         return;
       }
     }

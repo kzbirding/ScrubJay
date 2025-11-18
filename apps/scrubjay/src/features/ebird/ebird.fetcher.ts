@@ -8,6 +8,14 @@ export class EBirdFetcher {
 
   constructor(private readonly configService: ConfigService) {}
 
+  /**
+   * Fetches notable obervations for a specified region code
+   *
+   * @param regionCode
+   * @returns
+   *
+   * @throws error if EBIRD_BASE_URL or EBIRD_TOKEN are undefined
+   */
   async fetchRareObservations(regionCode: string): Promise<EBirdObservation[]> {
     const url = new URL(
       `/v2/data/obs/${regionCode}/recent/notable?back=7&detail=full`,
@@ -15,7 +23,9 @@ export class EBirdFetcher {
     );
 
     const response = await fetch(url, {
-      headers: { "X-eBirdApiToken": this.configService.get("EBIRD_TOKEN")! },
+      headers: {
+        "X-eBirdApiToken": this.configService.getOrThrow("EBIRD_TOKEN"),
+      },
     });
     if (!response.ok) {
       this.logger.warn(`Failed to fetch observations: ${response.statusText}`);

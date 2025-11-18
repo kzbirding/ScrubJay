@@ -142,7 +142,8 @@ function generateRandomObservation(
         availableLocations[
           Math.floor(Math.random() * availableLocations.length)
         ];
-      hotspotData = randomLocation!; // We know it exists because we checked length > 0
+      // biome-ignore lint/style/noNonNullAssertion: We know it exists because we checked length > 0
+      hotspotData = randomLocation!;
     } else {
       // Create new location and add to pool
       hotspotData = {
@@ -245,12 +246,13 @@ app.get("/v2/data/obs/:regionCode/recent", (req, res) => {
     return res.status(404).json({ error: "Region not found" });
   }
 
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
   const includeProv = includeProvisional === "true";
   const hotspotOnly = hotspot === "true";
 
-  // Generate observations
-  const regionObservations = observations[regionCode] || [];
   const newObservations: eBirdObservation[] = [];
 
   for (let i = 0; i < Math.min(maxResultsNum, 20); i++) {
@@ -288,7 +290,10 @@ app.get("/v2/data/obs/:regionCode/recent/notable", (req, res) => {
     return res.status(404).json({ error: "Region not found" });
   }
 
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
   const includeProv = includeProvisional === "true";
   const hotspotOnly = hotspot === "true";
 
@@ -353,7 +358,10 @@ app.get("/v2/data/obs/:regionCode/recent/:speciesCode", (req, res) => {
     return res.status(404).json({ error: "Species not found" });
   }
 
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
   const includeProv = includeProvisional === "true";
   const hotspotOnly = hotspot === "true";
 
@@ -396,7 +404,10 @@ app.get("/v2/ref/hotspot/:regionCode", (req, res) => {
   }
 
   const regionHotspots = hotspots[regionCode] || [];
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
 
   res.json(regionHotspots.slice(0, maxResultsNum));
 });
@@ -449,7 +460,10 @@ app.get("/v2/data/obs/geo/recent", (req, res) => {
       .json({ error: "Latitude and longitude are required" });
   }
 
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
   const includeProv = includeProvisional === "true";
 
   // Generate observations near the given coordinates
@@ -487,7 +501,10 @@ app.get("/v2/data/obs/geo/recent/notable", (req, res) => {
       .json({ error: "Latitude and longitude are required" });
   }
 
-  const maxResultsNum = Math.min(parseInt(maxResults as string) || 50, 10000);
+  const maxResultsNum = Math.min(
+    parseInt(maxResults as string, 10) || 50,
+    10000,
+  );
   const includeProv = includeProvisional === "true";
 
   // Generate notable observations near the given coordinates
@@ -516,13 +533,13 @@ app.get("/v2/data/obs/geo/recent/notable", (req, res) => {
 });
 
 // Error handling middleware
-app.use((err: Error, req: express.Request, res: express.Response) => {
+app.use((err: Error, _req: express.Request, res: express.Response) => {
   console.error(err.stack);
   res.status(500).json({ error: "Internal server error" });
 });
 
 // 404 handler
-app.use((req: express.Request, res: express.Response) => {
+app.use((_req: express.Request, res: express.Response) => {
   res.status(404).json({ error: "Endpoint not found" });
 });
 

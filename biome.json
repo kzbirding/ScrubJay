@@ -4,7 +4,6 @@
     "actions": {
       "source": {
         "organizeImports": "on",
-        "recommended": true,
         "useSortedAttributes": "on",
         "useSortedKeys": "on",
         "useSortedProperties": "on"
@@ -24,6 +23,9 @@
     "formatter": {
       "lineWidth": 80,
       "quoteStyle": "double"
+    },
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
     }
   },
   "linter": {

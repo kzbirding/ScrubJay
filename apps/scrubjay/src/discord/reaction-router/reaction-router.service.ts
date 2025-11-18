@@ -1,5 +1,8 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { ReactionHandler, ReactionHandlerPayload } from "./reaction-handler";
+import type {
+  ReactionHandler,
+  ReactionHandlerPayload,
+} from "./reaction-handler";
 
 export const REACTION_HANDLERS = Symbol("REACTION_HANDLERS");
 
@@ -7,7 +10,7 @@ export const REACTION_HANDLERS = Symbol("REACTION_HANDLERS");
 export class ReactionRouter {
   constructor(
     @Inject(REACTION_HANDLERS)
-    private readonly handlers: ReactionHandler[]
+    private readonly handlers: ReactionHandler[],
   ) {}
 
   async handle(payload: ReactionHandlerPayload) {

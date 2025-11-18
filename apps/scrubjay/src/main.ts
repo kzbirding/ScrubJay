@@ -6,7 +6,8 @@ import { AppModule } from "./app.module";
 
 async function bootstrap() {
   // Run migrations before starting the app
-  const db = drizzle(process.env.DATABASE_URL!);
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required.");
+  const db = drizzle(process.env.DATABASE_URL);
   await migrate(db, {
     migrationsFolder: join(process.cwd(), "src", "drizzle"),
   });

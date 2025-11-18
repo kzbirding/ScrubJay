@@ -23,11 +23,9 @@ export class EBirdIngestJob {
 
     const regions = await this.sourcesService.getEBirdSources();
 
-    let total = 0;
     for (const region of regions) {
       try {
         const inserted = await this.ebird.ingestRegion(region);
-        total += inserted;
         this.logger.log(`Region ${region}: ${inserted} alerts ingested`);
       } catch (err) {
         this.logger.error(`Failed to ingest ${region}: ${err}`);

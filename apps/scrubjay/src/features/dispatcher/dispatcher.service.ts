@@ -26,23 +26,26 @@ export class DispatcherService {
     >();
 
     for (const obs of ungroupedObservations) {
-      if (!channels.has(obs.channelId)) {
-        channels.set(obs.channelId, new Map());
+      let speciesMap = channels.get(obs.channelId);
+
+      if (!speciesMap) {
+        speciesMap = new Map();
+        channels.set(obs.channelId, speciesMap);
       }
 
-      const speciesMap = channels.get(obs.channelId)!;
-
-      if (!speciesMap.has(obs.speciesCode)) {
-        speciesMap.set(obs.speciesCode, new Map());
+      let locMap = speciesMap.get(obs.speciesCode);
+      if (!locMap) {
+        locMap = new Map();
+        speciesMap.set(obs.speciesCode, locMap);
       }
 
-      const locMap = speciesMap.get(obs.speciesCode)!;
-
-      if (!locMap.has(obs.locId)) {
-        locMap.set(obs.locId, []);
+      let list = locMap.get(obs.locId);
+      if (!list) {
+        list = [];
+        locMap.set(obs.locId, list);
       }
 
-      locMap.get(obs.locId)!.push(obs);
+      list.push(obs);
     }
 
     return channels;
@@ -131,7 +134,7 @@ export class DispatcherService {
     try {
       await this.discord.sendEmbedToChannel(channelId, embed);
     } catch (err) {
-      this.logger.error("Failed to send embed to channel.");
+      this.logger.error(`Failed to send embed to channel: ${err}`);
     }
   }
 

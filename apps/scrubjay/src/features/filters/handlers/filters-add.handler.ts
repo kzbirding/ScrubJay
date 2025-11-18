@@ -41,7 +41,7 @@ export class FiltersAddHandler implements ReactionHandler {
       await this.filters.addFilter(message.channelId, speciesCommonName);
     } catch (err) {
       this.logger.error(
-        `Could not insert filter into database: ${message.channelId} ${speciesCommonName}`,
+        `Could not insert filter into database (${message.channelId}:${speciesCommonName}): ${err}`,
       );
       return;
     }

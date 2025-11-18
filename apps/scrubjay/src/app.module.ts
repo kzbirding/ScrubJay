@@ -32,7 +32,7 @@ const configSchema = Joi.object({
           GatewayIntentBits.GuildMessageReactions,
         ],
         partials: [Partials.Message, Partials.Channel, Partials.Reaction],
-        token: configService.get<string>("DISCORD_TOKEN")!,
+        token: configService.getOrThrow<string>("DISCORD_TOKEN"),
       }),
     }),
     JobsModule,

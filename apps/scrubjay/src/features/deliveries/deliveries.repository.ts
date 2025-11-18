@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { and, eq, sql } from "drizzle-orm";
 import { deliveries } from "@/core/drizzle/drizzle.schema";
 import type { DrizzleService } from "@/core/drizzle/drizzle.service";
@@ -7,6 +7,7 @@ type AlertKind = "ebird";
 
 @Injectable()
 export class DeliveriesRepository {
+  private readonly logger = new Logger(DeliveriesRepository.name);
   constructor(private readonly drizzle: DrizzleService) {}
 
   async isDelivered(alertKind: AlertKind, alertId: string, channelId: string) {
@@ -35,7 +36,7 @@ export class DeliveriesRepository {
         })
         .onConflictDoNothing();
     } catch (err) {
-      // Ignore on unique constaint violation
+      this.logger.warn(`Error marking delivery: ${err}`);
     }
   }
 
