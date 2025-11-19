@@ -4,7 +4,6 @@ node_modules
 **/.vscode
 **/.DS_Store
 **/*.db
-config.json
 .turbo
 
 dump.sql
