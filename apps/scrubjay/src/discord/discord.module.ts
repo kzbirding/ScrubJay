@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { DrizzleModule } from "@/core/drizzle/drizzle.module";
 import { FiltersModule } from "@/features/filters/filters.module";
 import { FiltersAddHandler } from "@/features/filters/handlers/filters-add.handler";
+import { CommandsModule } from "./commands/commands.module";
 import { DiscordHelper } from "./discord.helper";
 import { ReactionListener } from "./listeners/reaction.listener";
 import {
@@ -11,7 +12,7 @@ import {
 
 @Module({
   exports: [DiscordHelper],
-  imports: [DrizzleModule, FiltersModule],
+  imports: [DrizzleModule, FiltersModule, CommandsModule],
   providers: [
     DiscordHelper,
     ReactionRouter,

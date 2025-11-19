@@ -8,6 +8,7 @@ import { JobsModule } from "@/features/jobs/jobs.module";
 import { DrizzleModule } from "./core/drizzle/drizzle.module";
 
 const configSchema = Joi.object({
+  DEVELOPMENT_SERVER: Joi.string().optional(),
   DISCORD_CLIENT_ID: Joi.string().required(),
   DISCORD_TOKEN: Joi.string().required(),
   EBIRD_BASE_URL: Joi.string().optional().default("https://api.ebird.org/"),
@@ -26,6 +27,9 @@ const configSchema = Joi.object({
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
+        development: configService.get("DEVELOPMENT_SERVER_ID") && [
+          configService.get("DEVELOPMENT_SERVER_ID"),
+        ],
         intents: [
           GatewayIntentBits.Guilds,
           GatewayIntentBits.GuildMessages,
