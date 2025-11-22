@@ -1,71 +1,46 @@
-import crypto from "node:crypto";
 import { Injectable, Logger } from "@nestjs/common";
-import * as Parser from "rss-parser";
+import type * as Parser from "rss-parser";
+import { RssFetcher } from "./rss.fetcher";
 import { RssRepository } from "./rss.repository";
-import { NormalizedRssFeed, NormalizedRssItem } from "./rss.schema";
+import { RssTransformer } from "./rss.transformer";
 
 @Injectable()
 export class RssService {
   private readonly logger = new Logger(RssService.name);
-  private readonly parser = new Parser();
 
-  constructor(private readonly repo: RssRepository) {}
-
-  private getStableId(item: Parser.Item): string {
-    if (item.guid) return item.guid;
-    if (item.link) return item.link;
-
-    const composite = [
-      item.title ?? "",
-      item.pubDate ?? "",
-      item.link ?? "",
-    ].join("::");
-
-    return crypto.createHash("sha1").update(composite).digest("hex");
-  }
-
-  private normalize(item: Parser.Item, sourceId: string): NormalizedRssItem {
-    return {
-      contentHtml: item.content ?? null,
-      description: item.contentSnippet ?? null,
-      id: this.getStableId(item),
-      link: item.link ?? null,
-      publishedAt: item.isoDate
-        ? new Date(item.isoDate)
-        : item.pubDate
-          ? new Date(item.pubDate)
-          : null,
-      sourceId,
-      title: item.title ?? null,
-    };
-  }
-
-  private async parseRssSource({
-    id,
-    url,
-  }: {
-    id: string;
-    url: string | URL;
-  }): Promise<NormalizedRssFeed> {
-    const parsedFeed = await this.parser.parseURL(url.toString());
-    return {
-      items: parsedFeed.items.map((i) => this.normalize(i, id)),
-      title: parsedFeed.title || "",
-    };
-  }
+  constructor(
+    private readonly fetcher: RssFetcher,
+    private readonly transformer: RssTransformer,
+    private readonly repo: RssRepository,
+  ) {}
 
   async ingestRssSource(rssSource: { id: string; url: string | URL }) {
-    const parsedFeed = await this.parseRssSource(rssSource);
+    let rawFeed: Parser.Output<Parser.Item>;
+    try {
+      rawFeed = await this.fetcher.fetchRssFeed(rssSource.url);
+      this.logger.log(
+        `Fetched ${rawFeed.items.length} items from RSS source ${rssSource.id}`,
+      );
+    } catch (err) {
+      this.logger.error(`Error fetching RSS feed: ${err}`);
+      return 0;
+    }
+
+    const transformedItems = this.transformer.transformFeed(
+      rawFeed,
+      rssSource.id,
+    );
 
     let insertedCount = 0;
-    for (const parsedItem of parsedFeed.items) {
+    for (const item of transformedItems) {
       try {
-        await this.repo.upsertRssItem(parsedItem);
+        await this.repo.upsertRssItem(item);
         insertedCount++;
       } catch (err) {
         this.logger.error(`Could not upsert RSS Item: ${err}`);
       }
     }
+
     return insertedCount;
   }
 }
