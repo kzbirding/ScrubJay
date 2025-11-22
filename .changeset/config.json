@@ -1,11 +1,15 @@
 {
-	"$schema": "https://unpkg.com/@changesets/config@3.0.5/schema.json",
-	"changelog": "@changesets/cli/changelog",
-	"commit": false,
-	"fixed": [],
-	"linked": [],
-	"access": "restricted",
-	"baseBranch": "main",
-	"updateInternalDependencies": "patch",
-	"ignore": ["@scrubjay/*", "mock-api"]
+  "$schema": "https://unpkg.com/@changesets/config@3.0.5/schema.json",
+  "access": "restricted",
+  "baseBranch": "main",
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [],
+  "ignore": ["@scrubjay/*", "mock-api"],
+  "linked": [],
+  "privatePackages": {
+    "tag": true,
+    "version": true
+  },
+  "updateInternalDependencies": "patch"
 }
