@@ -44,6 +44,7 @@ jobs:
         run: pnpm install
 
       - name: Create release pull request
+        id: publish
         uses: changesets/action@v1
         with:
           publish: pnpm changeset publish
