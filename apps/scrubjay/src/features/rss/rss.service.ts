@@ -14,12 +14,16 @@ export class RssService {
     private readonly repo: RssRepository,
   ) {}
 
-  async ingestRssSource(rssSource: { id: string; url: string | URL }) {
+  async ingestRssSource(rssSource: {
+    id: string;
+    name: string;
+    url: string | URL;
+  }) {
     let rawFeed: Parser.Output<Parser.Item>;
     try {
       rawFeed = await this.fetcher.fetchRssFeed(rssSource.url);
       this.logger.log(
-        `Fetched ${rawFeed.items.length} items from RSS source ${rssSource.id}`,
+        `Fetched ${rawFeed.items.length} items from RSS source ${rssSource.name}`,
       );
     } catch (err) {
       this.logger.error(`Error fetching RSS feed: ${err}`);
