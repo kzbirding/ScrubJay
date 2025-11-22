@@ -97,7 +97,12 @@ export class DispatcherRepository {
     return this.drizzle.db
       .select({
         channelId: channelRssSubscriptions.channelId,
+        contentHtml: rssItems.contentHtml,
+        description: rssItems.description,
         id: rssItems.id,
+        link: rssItems.link,
+        publishedAt: rssItems.publishedAt,
+        title: rssItems.title,
       })
       .from(rssItems)
       .innerJoin(

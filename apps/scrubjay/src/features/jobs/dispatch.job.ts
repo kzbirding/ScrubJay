@@ -21,6 +21,7 @@ export class DispatchJob {
     this.logger.debug(
       `Running dispatch job for alerts since ${since.toISOString()}`,
     );
-    await this.dispatcher.dispatchEBirdSince(since);
+    await this.dispatcher.dispatchSince("ebird", since);
+    await this.dispatcher.dispatchSince("rss", since);
   }
 }

@@ -1,5 +1,6 @@
 import { Injectable, Logger, type OnModuleInit } from "@nestjs/common";
 import { DeliveriesService } from "@/features/deliveries/deliveries.service";
+import type { DispatcherMap } from "@/features/dispatcher/dispatcher.interface";
 import { DispatcherService } from "@/features/dispatcher/dispatcher.service";
 import { EBirdService } from "@/features/ebird/ebird.service";
 import { SourcesService } from "@/features/sources/sources.service";
@@ -13,7 +14,6 @@ import { RssService } from "../rss/rss.service";
 export class BootstrapService implements OnModuleInit {
   private readonly logger = new Logger(BootstrapService.name);
 
-  private readonly initDate = new Date();
   private bootstrapComplete = false;
   private bootstrapPromise: Promise<void> | null = null;
 
@@ -70,29 +70,27 @@ export class BootstrapService implements OnModuleInit {
     const rssSources = await this.sources.getRssSources();
 
     try {
-      for (const region of regions) {
-        try {
-          const count = await this.ebirdService.ingestRegion(region);
-          this.logger.log(`Populated ${count} observations for ${region}`);
-        } catch (err) {
-          this.logger.error(`Population failed for ${region}: ${err}`);
-        }
-      }
+      await this.ingestSources(
+        regions,
+        (region) => this.ebirdService.ingestRegion(region),
+        (region) => region,
+      );
 
-      await this.markExistingEBirdObservationsAsDelivered();
+      await this.markExistingAsDelivered("ebird", (obs) => ({
+        alertId: `${obs.speciesCode}:${obs.subId}`,
+        channelId: obs.channelId,
+      }));
 
-      for (const rssSource of rssSources) {
-        try {
-          const count = await this.rssService.ingestRssSource(rssSource);
-          this.logger.log(
-            `Populated ${count} observations for ${rssSource.name}`,
-          );
-        } catch (err) {
-          this.logger.error(`Population failed for ${rssSource.name}: ${err}`);
-        }
-      }
+      await this.ingestSources(
+        rssSources,
+        (source) => this.rssService.ingestRssSource(source),
+        (source) => source.name,
+      );
 
-      await this.markExistingRssItemsAsDelivered();
+      await this.markExistingAsDelivered("rss", (item) => ({
+        alertId: item.id,
+        channelId: item.channelId,
+      }));
 
       this.logger.log("Startup population complete.");
     } finally {
@@ -102,53 +100,61 @@ export class BootstrapService implements OnModuleInit {
   }
 
   /**
-   * For every observation currently in DB, mark as delivered
+   * Generic helper to ingest sources with error handling.
+   */
+  private async ingestSources<T>(
+    sources: T[],
+    ingestFn: (source: T) => Promise<number>,
+    getName: (source: T) => string,
+  ): Promise<void> {
+    for (const source of sources) {
+      try {
+        const count = await ingestFn(source);
+        this.logger.log(
+          `Populated ${count} observations for ${getName(source)}`,
+        );
+      } catch (err) {
+        this.logger.error(`Population failed for ${getName(source)}: ${err}`);
+      }
+    }
+  }
+
+  /**
+   * For every item currently in DB, mark as delivered
    * for all matching channels (no Discord messages sent).
    */
-  private async markExistingEBirdObservationsAsDelivered() {
-    this.logger.log("Marking existing eBird observations as delivered...");
-    const observations =
-      await this.dispatcherService.getUndeliveredObservationsSinceDate();
+  private async markExistingAsDelivered<T extends keyof DispatcherMap>(
+    alertKind: T,
+    extractDeliveryInfo: (
+      item: Awaited<
+        ReturnType<DispatcherMap[T]["getUndeliveredSinceDate"]>
+      >[number],
+    ) => { alertId: string; channelId: string },
+  ): Promise<void> {
+    const kindLabel =
+      alertKind === "ebird" ? "eBird observations" : "RSS items";
+    this.logger.log(`Marking existing ${kindLabel} as delivered...`);
+
+    const items =
+      await this.dispatcherService.getUndeliveredSinceDate(alertKind);
+
+    type ItemType = Awaited<
+      ReturnType<DispatcherMap[T]["getUndeliveredSinceDate"]>
+    >[number];
 
     const deliveryValues: {
-      alertKind: "ebird";
+      alertKind: T;
       alertId: string;
       channelId: string;
-    }[] = [];
-
-    for (const obs of observations) {
-      deliveryValues.push({
-        alertId: `${obs.speciesCode}:${obs.subId}`,
-        alertKind: "ebird",
-        channelId: obs.channelId,
-      });
-    }
+    }[] = items.map((item: ItemType) => ({
+      ...extractDeliveryInfo(item),
+      alertKind,
+    }));
 
     await this.deliveries.recordDeliveries(deliveryValues);
 
     this.logger.log(
       `Marked ${deliveryValues.length} deliveries as sent (bootstrap mode).`,
     );
-  }
-
-  private async markExistingRssItemsAsDelivered() {
-    this.logger.log("Marking existing RSS items as delivered...");
-    const rssItems = await this.dispatcherService.getUndeliveredRssSinceDate();
-
-    const deliveryValues: {
-      alertKind: "rss";
-      alertId: string;
-      channelId: string;
-    }[] = [];
-
-    for (const rssItem of rssItems) {
-      deliveryValues.push({
-        alertId: rssItem.id,
-        alertKind: "rss",
-        channelId: rssItem.channelId,
-      });
-    }
-
-    await this.deliveries.recordDeliveries(deliveryValues);
   }
 }
