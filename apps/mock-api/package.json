@@ -12,6 +12,7 @@
   },
   "main": "index.js",
   "name": "mock-api",
+  "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts"
   },
