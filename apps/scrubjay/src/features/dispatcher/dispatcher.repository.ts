@@ -109,7 +109,10 @@ export class DispatcherRepository {
       .from(rssItems)
       .innerJoin(
         channelRssSubscriptions,
-        and(eq(channelRssSubscriptions.active, true)),
+        and(
+          eq(channelRssSubscriptions.active, true),
+          eq(channelRssSubscriptions.sourceId, rssItems.sourceId),
+        ),
       )
       .leftJoin(
         deliveries,
