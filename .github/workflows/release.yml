@@ -16,7 +16,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/scrubjay-discord
 
 jobs:
   release:
@@ -75,15 +74,16 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.package.name }}
           tags: |
             type=semver,pattern={{version}},value=${{ matrix.package.version }}
 
-      - name: Build and push
+      - name: Build and push scrubjay-discord image
+        if: matrix.package.name == 'scrubjay-discord'
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./apps/scrubjay/Dockerfile
+          file: ./apps/scrubjay-discord/Dockerfile
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}

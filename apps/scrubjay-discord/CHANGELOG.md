@@ -1,4 +1,4 @@
-# scrubjay
+# scrubjay-discord
 
 ## 0.1.7
 

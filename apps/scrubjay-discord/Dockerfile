@@ -10,7 +10,7 @@ FROM base AS builder
 WORKDIR /usr/src/app
 COPY package.json pnpm-lock.yaml* ./
 COPY . .
-RUN turbo prune scrubjay --docker
+RUN turbo prune scrubjay-discord --docker
 
 FROM base AS installer
 WORKDIR /usr/src/app
@@ -22,7 +22,7 @@ COPY --from=builder /usr/src/app/out/full/ .
 
 RUN pnpm install --frozen-lockfile
 COPY turbo.json turbo.json
-RUN turbo run build --filter=scrubjay
+RUN turbo run build --filter=scrubjay-discord
 
 FROM node:22-alpine as runner
 
@@ -38,8 +38,8 @@ COPY --from=installer --chown=nodejs:nodejs /usr/src/app/pnpm-workspace.yaml ./p
 COPY --from=installer --chown=nodejs:nodejs /usr/src/app/node_modules ./node_modules
 
 # Copy the entire app directory (includes dist, node_modules, and source files like drizzle migrations)
-COPY --from=installer --chown=nodejs:nodejs /usr/src/app/apps/scrubjay ./apps/scrubjay
+COPY --from=installer --chown=nodejs:nodejs /usr/src/app/apps/scrubjay-discord ./apps/scrubjay-discord
  
 USER nodejs
-WORKDIR /usr/src/app/apps/scrubjay
+WORKDIR /usr/src/app/apps/scrubjay-discord
 CMD ["node", "dist/src/main.js"]
