@@ -21,6 +21,13 @@
       "tag": "0002_silky_psylocke",
       "version": "7",
       "when": 1763787622015
+    },
+    {
+      "breakpoints": true,
+      "idx": 3,
+      "tag": "0003_freezing_princess_powerful",
+      "version": "7",
+      "when": 1763867254460
     }
   ],
   "version": "7"
