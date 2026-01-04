@@ -52,11 +52,11 @@ export class StatusCommand {
       return;
     }
 
-    const token = process.env.EBIRD_API_KEY;
+    const token = process.env.EBIRD_TOKEN;
     if (!token) {
       await interaction.reply({
         content:
-          "❌ EBIRD_API_KEY is not set on the server. Add your eBird token in Railway → Variables as EBIRD_API_KEY, then redeploy.",
+          "❌ EBIRD_TOKEN is not set on the server. It should already exist if other eBird commands work.",
         ephemeral: true,
       });
       return;
@@ -84,12 +84,10 @@ export class StatusCommand {
       const body = await res.text().catch(() => "");
       console.error("eBird response not ok:", res.status, body);
 
-      const msg = `❌ eBird error: HTTP ${res.status}${
-        body ? `\nDetails: ${body}` : ""
-      }`;
-
       await interaction.reply({
-        content: msg.slice(0, 1900),
+        content: `❌ eBird error: HTTP ${res.status}${
+          body ? `\nDetails: ${body}` : ""
+        }`.slice(0, 1900),
         ephemeral: true,
       });
       return;
