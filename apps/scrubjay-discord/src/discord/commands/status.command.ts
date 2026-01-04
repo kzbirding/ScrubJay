@@ -112,6 +112,38 @@ function trendFromObsDates(data: any[]): string {
   return "➖ Stable";
 }
 
+// NEW: Most recent 5 UNIQUE locations (compact) with checklist links
+function formatRecentLocations(data: any[], limit = 5): string {
+  const seenLocations = new Set<string>();
+  const rows: string[] = [];
+
+  const sorted = data
+    .slice()
+    .sort((a, b) => String(b.obsDt || "").localeCompare(String(a.obsDt || "")));
+
+  for (const o of sorted) {
+    const locId = o.locId;
+    if (!locId || seenLocations.has(locId)) continue;
+
+    seenLocations.add(locId);
+
+    const date = o.obsDt ? String(o.obsDt).split(" ")[0] : "—";
+    const place = o.locName ? String(o.locName) : "Unknown location";
+    const subId = o.subId ? String(o.subId) : null;
+
+    // Links inside embed fields do NOT unfurl into big previews
+    const link = subId ? `https://ebird.org/checklist/${subId}` : null;
+
+    rows.push(
+      link ? `• *${place}* — [${date}](${link})` : `• *${place}* — ${date}`,
+    );
+
+    if (rows.length >= limit) break;
+  }
+
+  return rows.length ? rows.join("\n") : "—";
+}
+
 @Injectable()
 export class StatusCommand {
   constructor(private readonly taxonomy: EbirdTaxonomyService) {}
@@ -169,7 +201,10 @@ export class StatusCommand {
       .setTitle(comName)
       .setDescription(county.label)
       .addFields(
-        { name: "Observation frequency (30 days)", value: labelForCount(county.tier, count) },
+        {
+          name: "Observation frequency (30 days)",
+          value: labelForCount(county.tier, count),
+        },
         { name: "Recent reports", value: String(count), inline: true },
         {
           name: "Last reported",
@@ -181,8 +216,13 @@ export class StatusCommand {
         },
         { name: "Trend", value: trendFromObsDates(data), inline: true },
         {
+          name: "Recent locations",
+          value: formatRecentLocations(data, 5),
+          inline: false,
+        },
+        {
           name: "eBird",
-          value: `[Recent sightings](https://ebird.org/region/${county.code}/observations/${speciesCode}) • [Region](https://ebird.org/region/${county.code}) • [Species](https://ebird.org/species/${speciesCode})`,
+          value: `[Region](https://ebird.org/region/${county.code}) • [Species](https://ebird.org/species/${speciesCode})`,
         },
       )
       .setFooter({
