@@ -17,7 +17,7 @@ export class DispatchJob {
     // Wait for bootstrap to complete before running
     await this.bootstrapService.waitForBootstrap();
 
-    const since = new Date(Date.now() - 15 * 60 * 1000);
+    const since = new Date(Date.now() - 5 * 60 * 1000);
     this.logger.debug(
       `Running dispatch job for alerts since ${since.toISOString()}`,
     );
