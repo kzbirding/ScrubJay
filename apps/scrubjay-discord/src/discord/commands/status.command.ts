@@ -1,24 +1,36 @@
 import { Injectable } from "@nestjs/common";
+import { EmbedBuilder } from "discord.js";
 import {
-  SlashCommand,
-  SlashCommandContext,
   Context,
   Options,
+  SlashCommand,
+  SlashCommandContext,
+  StringOption,
 } from "necord";
-import { EmbedBuilder } from "discord.js";
 
 class StatusOptions {
-  bird: string;
-  region: string;
+  @StringOption({
+    name: "bird",
+    description: "Bird name (ex: California Gnatcatcher)",
+    required: true,
+  })
+  bird!: string;
+
+  @StringOption({
+    name: "region",
+    description: "Region (ex: San Diego)",
+    required: true,
+  })
+  region!: string;
 }
 
 @Injectable()
-@SlashCommand({
-  name: "status",
-  description: "Show recent status of a bird in a region",
-})
 export class StatusCommand {
-  public async onStatus(
+  @SlashCommand({
+    name: "status",
+    description: "Show recent status of a bird in a region",
+  })
+  public async status(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: StatusOptions,
   ) {

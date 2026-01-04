@@ -4,7 +4,7 @@ import { SubscriptionsModule } from "@/features/subscriptions/subscriptions.modu
 import { PhotoCommands } from "./photo-commands.service";
 import { SubscriptionCommands } from "./subscription-commands.service";
 import { UtilCommands } from "./util-commands.service";
-import { StatusCommand } from "./status.commands";
+import { StatusCommand } from "./status.command";
 
 @Module({
   imports: [FiltersModule, SubscriptionsModule],
