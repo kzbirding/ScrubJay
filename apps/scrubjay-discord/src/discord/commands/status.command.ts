@@ -12,7 +12,7 @@ import { REGION_MAP } from "./region-map";
 class StatusOptions {
   @StringOption({
     name: "bird",
-    description: "Bird name (ex: California Gnatcatcher)",
+    description: "Bird name (ex: Mourning Dove)",
     required: true,
   })
   bird!: string;
@@ -38,10 +38,25 @@ export class StatusCommand {
     const birdName = options.bird.trim();
     const regionKey = options.region.toLowerCase().trim();
 
-    const region = REGION_MAP[regionKey];
+    const region =
+      REGION_MAP[regionKey] ||
+      REGION_MAP[regionKey.replace(" county", "").trim()] ||
+      REGION_MAP[regionKey.replace("county", "").trim()];
+
     if (!region) {
       await interaction.reply({
-        content: "❌ Unknown region. Try: San Diego, Orange County, LA, Riverside.",
+        content:
+          "❌ Unknown region. Try: San Diego, Orange County, Los Angeles, Riverside, San Bernardino, Imperial.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const token = process.env.EBIRD_API_KEY;
+    if (!token) {
+      await interaction.reply({
+        content:
+          "❌ EBIRD_API_KEY is not set on the server. Add your eBird token in Railway → Variables as EBIRD_API_KEY, then redeploy.",
         ephemeral: true,
       });
       return;
@@ -49,15 +64,32 @@ export class StatusCommand {
 
     const url = `https://api.ebird.org/v2/data/obs/${region.code}/recent?back=30`;
 
-    const res = await fetch(url, {
-      headers: {
-        "X-eBirdApiToken": process.env.EBIRD_API_KEY!,
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: {
+          "X-eBirdApiToken": token,
+        },
+      });
+    } catch (err) {
+      console.error("eBird fetch threw:", err);
+      await interaction.reply({
+        content: "❌ Network error while contacting eBird (fetch failed).",
+        ephemeral: true,
+      });
+      return;
+    }
 
     if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error("eBird response not ok:", res.status, body);
+
+      const msg = `❌ eBird error: HTTP ${res.status}${
+        body ? `\nDetails: ${body}` : ""
+      }`;
+
       await interaction.reply({
-        content: "❌ Failed to fetch eBird data.",
+        content: msg.slice(0, 1900),
         ephemeral: true,
       });
       return;
@@ -66,7 +98,7 @@ export class StatusCommand {
     const data: any[] = await res.json();
 
     const matches = data.filter(
-      (o) => o.comName?.toLowerCase() === birdName.toLowerCase(),
+      (o) => (o.comName ?? "").toLowerCase() === birdName.toLowerCase(),
     );
 
     const count = matches.length;
@@ -81,6 +113,7 @@ export class StatusCommand {
     if (count > 0) {
       lastReported = matches
         .map((o) => o.obsDt)
+        .filter(Boolean)
         .sort()
         .reverse()[0];
     }
