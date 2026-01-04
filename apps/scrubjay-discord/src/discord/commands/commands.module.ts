@@ -5,6 +5,7 @@ import { PhotoCommands } from "./photo-commands.service";
 import { SubscriptionCommands } from "./subscription-commands.service";
 import { UtilCommands } from "./util-commands.service";
 import { StatusCommand } from "./status.command";
+import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
 
 @Module({
   imports: [FiltersModule, SubscriptionsModule],
@@ -12,7 +13,8 @@ import { StatusCommand } from "./status.command";
     UtilCommands,
     SubscriptionCommands,
     PhotoCommands,
-    StatusCommand, // 👈 AND THIS
+    EbirdTaxonomyService,
+    StatusCommand,
   ],
 })
 export class CommandsModule {}

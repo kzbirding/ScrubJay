@@ -8,6 +8,7 @@ import {
   StringOption,
 } from "necord";
 import { REGION_MAP } from "./region-map";
+import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
 
 class StatusOptions {
   @StringOption({
@@ -25,15 +26,10 @@ class StatusOptions {
   region!: string;
 }
 
-type TaxonRow = {
-  speciesCode?: string;
-  comName?: string;
-  sciName?: string;
-  category?: string; // "species", etc.
-};
-
 @Injectable()
 export class StatusCommand {
+  constructor(private readonly taxonomy: EbirdTaxonomyService) {}
+
   @SlashCommand({
     name: "status",
     description: "Show recent eBird status for a bird in a region",
@@ -43,9 +39,8 @@ export class StatusCommand {
     @Options() options: StatusOptions,
   ) {
     const birdNameInput = options.bird.trim();
-    const birdKey = birdNameInput.toLowerCase();
-
     const regionKey = options.region.toLowerCase().trim();
+
     const region =
       REGION_MAP[regionKey] ||
       REGION_MAP[regionKey.replace(" county", "").trim()] ||
@@ -60,61 +55,43 @@ export class StatusCommand {
       return;
     }
 
-    const token = process.env.ebird_token;
+    const token = process.env.EBIRD_TOKEN;
     if (!token) {
       await interaction.reply({
-        content: "❌ ebird_token is not set on the server (Railway Variables).",
+        content:
+          "❌ ebird_token is not set on the server (Railway Variables).",
         ephemeral: true,
       });
       return;
     }
 
-    // 1) Resolve bird name -> speciesCode via taxonomy
-    // (Later we will cache this so it’s instant.)
-    const taxUrl = `https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale=en`;
-    let taxRes: Response;
-    try {
-      taxRes = await fetch(taxUrl, { headers: { "X-eBirdApiToken": token } });
-    } catch (err) {
-      console.error("Taxonomy fetch failed:", err);
+    // If taxonomy hasn’t loaded yet, fail gracefully
+    if (!this.taxonomy.isLoaded()) {
+      const err = this.taxonomy.getLoadError();
       await interaction.reply({
-        content: "❌ Network error while contacting eBird taxonomy.",
+        content:
+          `❌ Bird list isn’t loaded yet (startup). Try again in ~30 seconds.` +
+          (err ? `\nDetails: ${err}` : ""),
         ephemeral: true,
       });
       return;
     }
 
-    if (!taxRes.ok) {
-      const body = await taxRes.text().catch(() => "");
-      console.error("Taxonomy response not ok:", taxRes.status, body);
+    const entry = this.taxonomy.lookupCommonName(birdNameInput);
+    if (!entry) {
+      const suggestions = this.taxonomy.suggest(birdNameInput, 5);
       await interaction.reply({
-        content: `❌ eBird taxonomy error: HTTP ${taxRes.status}`.slice(0, 1900),
+        content:
+          `❌ I couldn’t find "${birdNameInput}" in eBird’s bird list.` +
+          (suggestions.length ? `\nDid you mean: ${suggestions.join(", ")}?` : ""),
         ephemeral: true,
       });
       return;
     }
 
-    const taxonomy: TaxonRow[] = await taxRes.json();
+    const { speciesCode, comName } = entry;
 
-    const match = taxonomy.find(
-      (t) =>
-        t.category === "species" &&
-        (t.comName ?? "").toLowerCase() === birdKey &&
-        !!t.speciesCode,
-    );
-
-    if (!match?.speciesCode) {
-      await interaction.reply({
-        content: `❌ Couldn't find that bird in eBird taxonomy: "${birdNameInput}". Try a full common name (ex: "Mourning Dove").`,
-        ephemeral: true,
-      });
-      return;
-    }
-
-    const speciesCode = match.speciesCode;
-    const displayName = match.comName ?? birdNameInput;
-
-    // 2) Query the correct endpoint: recent observations for THIS SPECIES in THIS REGION
+    // Correct endpoint: recent observations for THIS SPECIES in THIS REGION
     const obsUrl = `https://api.ebird.org/v2/data/obs/${region.code}/recent/${speciesCode}?back=30`;
 
     let res: Response;
@@ -125,7 +102,7 @@ export class StatusCommand {
     } catch (err) {
       console.error("eBird obs fetch threw:", err);
       await interaction.reply({
-        content: "❌ Network error while contacting eBird observations.",
+        content: "❌ Network error while contacting eBird.",
         ephemeral: true,
       });
       return;
@@ -146,6 +123,7 @@ export class StatusCommand {
     const data: any[] = await res.json();
     const count = data.length;
 
+    // Status tier (based on returned recent locations)
     let status = "🔴 Rare or absent";
     if (count >= 50) status = "🟢 Very common";
     else if (count >= 15) status = "🟢 Common";
@@ -154,7 +132,6 @@ export class StatusCommand {
 
     let lastReported = "—";
     if (count > 0) {
-      // obsDt is like "2026-01-04 09:20"
       lastReported = data
         .map((o) => o.obsDt)
         .filter(Boolean)
@@ -162,7 +139,7 @@ export class StatusCommand {
         .reverse()[0];
     }
 
-    // Simple trend: last 15 days vs previous 15 days (based on obsDt date portion)
+    // Simple trend: last 15 vs previous 15 (based on obsDt date part)
     const today = new Date();
     const daysAgo = (d: Date) =>
       Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
@@ -186,7 +163,7 @@ export class StatusCommand {
     else if (prev15 > last15 * 1.25) trend = "📉 Decreasing";
 
     const embed = new EmbedBuilder()
-      .setTitle(displayName)
+      .setTitle(comName)
       .setDescription(region.label)
       .addFields(
         { name: "Status (30 days)", value: status, inline: true },
