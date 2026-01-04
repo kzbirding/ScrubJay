@@ -7,7 +7,6 @@ import {
   SlashCommandContext,
   StringOption,
 } from "necord";
-import { REGION_MAP } from "./region-map";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
 
 class StatusOptions {
@@ -20,10 +19,116 @@ class StatusOptions {
 
   @StringOption({
     name: "region",
-    description: "Region (ex: San Diego)",
+    description: "County (San Diego, Imperial, Orange, Los Angeles, San Bernardino, Riverside)",
     required: true,
   })
   region!: string;
+}
+
+type EffortTier = "HIGH" | "MODERATE" | "LOW";
+
+type CountyConfig = {
+  code: string;
+  label: string;
+  tier: EffortTier;
+};
+
+const STATUS_COUNTIES: Record<string, CountyConfig> = {
+  // San Diego (HIGH)
+  "san diego": { code: "US-CA-073", label: "San Diego County, CA", tier: "HIGH" },
+  "san diego county": { code: "US-CA-073", label: "San Diego County, CA", tier: "HIGH" },
+
+  // Imperial (LOW)
+  "imperial": { code: "US-CA-025", label: "Imperial County, CA", tier: "LOW" },
+  "imperial county": { code: "US-CA-025", label: "Imperial County, CA", tier: "LOW" },
+
+  // Orange (HIGH)
+  "orange": { code: "US-CA-059", label: "Orange County, CA", tier: "HIGH" },
+  "orange county": { code: "US-CA-059", label: "Orange County, CA", tier: "HIGH" },
+  "oc": { code: "US-CA-059", label: "Orange County, CA", tier: "HIGH" },
+
+  // Los Angeles (HIGH)
+  "los angeles": { code: "US-CA-037", label: "Los Angeles County, CA", tier: "HIGH" },
+  "los angeles county": { code: "US-CA-037", label: "Los Angeles County, CA", tier: "HIGH" },
+  "la": { code: "US-CA-037", label: "Los Angeles County, CA", tier: "HIGH" },
+
+  // San Bernardino (MODERATE)
+  "san bernardino": { code: "US-CA-071", label: "San Bernardino County, CA", tier: "MODERATE" },
+  "san bernardino county": { code: "US-CA-071", label: "San Bernardino County, CA", tier: "MODERATE" },
+  "sb": { code: "US-CA-071", label: "San Bernardino County, CA", tier: "MODERATE" },
+
+  // Riverside (MODERATE)
+  "riverside": { code: "US-CA-065", label: "Riverside County, CA", tier: "MODERATE" },
+  "riverside county": { code: "US-CA-065", label: "Riverside County, CA", tier: "MODERATE" },
+};
+
+function normalizeRegion(input: string): string {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Convert "recent reports in last 30 days" to a non-abundance label.
+ * This is intentionally NOT "common/uncommon".
+ *
+ * Note: counts come from eBird "recent observations for species" endpoint,
+ * which reflects recent report volume (and is influenced by birding effort).
+ */
+function labelForCount(tier: EffortTier, count: number): string {
+  if (count <= 0) return "Not reported recently";
+
+  // HIGH effort counties: require more reports to call it "frequent"
+  if (tier === "HIGH") {
+    if (count >= 200) return "Very frequently observed";
+    if (count >= 80) return "Frequently observed";
+    if (count >= 20) return "Regularly observed";
+    if (count >= 5) return "Occasionally observed";
+    return "Rarely observed";
+  }
+
+  // MODERATE effort counties
+  if (tier === "MODERATE") {
+    if (count >= 120) return "Very frequently observed";
+    if (count >= 45) return "Frequently observed";
+    if (count >= 12) return "Regularly observed";
+    if (count >= 3) return "Occasionally observed";
+    return "Rarely observed";
+  }
+
+  // LOW effort counties (Imperial): fewer total checklists, hotspot clustering
+  if (count >= 60) return "Very frequently observed";
+  if (count >= 20) return "Frequently observed";
+  if (count >= 6) return "Regularly observed";
+  if (count >= 2) return "Occasionally observed";
+  return "Rarely observed";
+}
+
+function trendFromObsDates(data: any[]): string {
+  // Simple trend: last 15 days vs previous 15 days
+  const today = new Date();
+  const daysAgo = (d: Date) =>
+    Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+
+  let last15 = 0;
+  let prev15 = 0;
+
+  for (const o of data) {
+    const dtStr: string | undefined = o.obsDt;
+    if (!dtStr) continue;
+    const datePart = dtStr.split(" ")[0]; // YYYY-MM-DD
+    const d = new Date(datePart + "T00:00:00");
+    const ago = daysAgo(d);
+    if (ago < 0 || ago > 30) continue;
+    if (ago <= 15) last15 += 1;
+    else prev15 += 1;
+  }
+
+  if (last15 === 0 && prev15 === 0) return "—";
+  if (last15 > prev15 * 1.25) return "📈 Increasing";
+  if (prev15 > last15 * 1.25) return "📉 Decreasing";
+  return "➖ Stable";
 }
 
 @Injectable()
@@ -32,24 +137,21 @@ export class StatusCommand {
 
   @SlashCommand({
     name: "status",
-    description: "Show recent eBird status for a bird in a region",
+    description: "Show recent eBird status for a bird in a SoCal county",
   })
   public async status(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: StatusOptions,
   ) {
     const birdNameInput = options.bird.trim();
-    const regionKey = options.region.toLowerCase().trim();
+    const regionKey = normalizeRegion(options.region);
 
-    const region =
-      REGION_MAP[regionKey] ||
-      REGION_MAP[regionKey.replace(" county", "").trim()] ||
-      REGION_MAP[regionKey.replace("county", "").trim()];
+    const county = STATUS_COUNTIES[regionKey];
 
-    if (!region) {
+    if (!county) {
       await interaction.reply({
         content:
-          "❌ Unknown region. Try: San Diego, Orange County, Los Angeles, Riverside, San Bernardino, Imperial.",
+          "❌ Unknown county for /status.\nAllowed: San Diego, Imperial, Orange County (OC), Los Angeles (LA), San Bernardino (SB), Riverside.",
         ephemeral: true,
       });
       return;
@@ -59,13 +161,12 @@ export class StatusCommand {
     if (!token) {
       await interaction.reply({
         content:
-          "❌ ebird_token is not set on the server (Railway Variables).",
+          "❌ EBIRD_TOKEN is not set on the server (Railway Variables).",
         ephemeral: true,
       });
       return;
     }
 
-    // If taxonomy hasn’t loaded yet, fail gracefully
     if (!this.taxonomy.isLoaded()) {
       const err = this.taxonomy.getLoadError();
       await interaction.reply({
@@ -92,7 +193,7 @@ export class StatusCommand {
     const { speciesCode, comName } = entry;
 
     // Correct endpoint: recent observations for THIS SPECIES in THIS REGION
-    const obsUrl = `https://api.ebird.org/v2/data/obs/${region.code}/recent/${speciesCode}?back=30`;
+    const obsUrl = `https://api.ebird.org/v2/data/obs/${county.code}/recent/${speciesCode}?back=30`;
 
     let res: Response;
     try {
@@ -123,12 +224,7 @@ export class StatusCommand {
     const data: any[] = await res.json();
     const count = data.length;
 
-    // Status tier (based on returned recent locations)
-    let status = "🔴 Rare or absent";
-    if (count >= 50) status = "🟢 Very common";
-    else if (count >= 15) status = "🟢 Common";
-    else if (count >= 5) status = "🟡 Uncommon";
-    else if (count >= 1) status = "🟠 Scarce";
+    const frequencyLabel = labelForCount(county.tier, count);
 
     let lastReported = "—";
     if (count > 0) {
@@ -139,39 +235,20 @@ export class StatusCommand {
         .reverse()[0];
     }
 
-    // Simple trend: last 15 vs previous 15 (based on obsDt date part)
-    const today = new Date();
-    const daysAgo = (d: Date) =>
-      Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
-
-    let last15 = 0;
-    let prev15 = 0;
-
-    for (const o of data) {
-      const dtStr: string | undefined = o.obsDt;
-      if (!dtStr) continue;
-      const datePart = dtStr.split(" ")[0]; // YYYY-MM-DD
-      const d = new Date(datePart + "T00:00:00");
-      const ago = daysAgo(d);
-      if (ago < 0 || ago > 30) continue;
-      if (ago <= 15) last15 += 1;
-      else prev15 += 1;
-    }
-
-    let trend = "➖ Stable";
-    if (last15 > prev15 * 1.25) trend = "📈 Increasing";
-    else if (prev15 > last15 * 1.25) trend = "📉 Decreasing";
+    const trend = trendFromObsDates(data);
 
     const embed = new EmbedBuilder()
       .setTitle(comName)
-      .setDescription(region.label)
+      .setDescription(county.label)
       .addFields(
-        { name: "Status (30 days)", value: status, inline: true },
-        { name: "Recent locations", value: String(count), inline: true },
+        { name: "Observation frequency (30 days)", value: frequencyLabel, inline: false },
+        { name: "Recent reports (30 days)", value: String(count), inline: true },
         { name: "Last reported", value: lastReported, inline: true },
         { name: "Trend", value: trend, inline: true },
       )
-      .setFooter({ text: "Source: eBird (last 30 days)" });
+      .setFooter({
+        text: "Source: eBird (last 30 days). Labels reflect report frequency, not true abundance.",
+      });
 
     await interaction.reply({ embeds: [embed] });
   }
