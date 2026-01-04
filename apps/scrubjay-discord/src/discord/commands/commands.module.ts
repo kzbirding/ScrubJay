@@ -4,9 +4,15 @@ import { SubscriptionsModule } from "@/features/subscriptions/subscriptions.modu
 import { PhotoCommands } from "./photo-commands.service";
 import { SubscriptionCommands } from "./subscription-commands.service";
 import { UtilCommands } from "./util-commands.service";
+import { StatusCommand } from "./status.commands";
 
 @Module({
   imports: [FiltersModule, SubscriptionsModule],
-  providers: [UtilCommands, SubscriptionCommands, PhotoCommands],
+  providers: [
+    UtilCommands,
+    SubscriptionCommands,
+    PhotoCommands,
+    StatusCommand, // 👈 AND THIS
+  ],
 })
 export class CommandsModule {}
