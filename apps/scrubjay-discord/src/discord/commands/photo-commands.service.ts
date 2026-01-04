@@ -7,6 +7,13 @@ type INatTaxon = {
   id: number;
   name: string;
   preferred_common_name?: string;
+  taxon_photos?: Array<{
+    photo: {
+      url: string;
+      license_code?: string;
+      attribution?: string;
+    };
+  }>;
 };
 
 type INatPhotoPick = {
@@ -40,17 +47,26 @@ export class PhotoCommands {
     try {
       const taxon = await this.findBirdTaxon(query);
       if (!taxon) {
-        return interaction.editReply(`Couldn't find a bird species for **${query}**.`);
+        return interaction.editReply(
+          `Couldn't find a bird species for **${query}**.`,
+        );
       }
 
-      const photos = await this.getRecentPhotos(taxon.id, count);
+      // Prefer curated "taxon photos" (usually much better than random observations)
+      let photos = this.getTaxonPhotos(taxon, count);
+
+      // Fallback: if a taxon has no curated photos, fall back to recent research-grade observations
+      if (!photos.length) {
+        photos = await this.getRecentPhotos(taxon.id, count);
+      }
+
       if (!photos.length) {
         const label = taxon.preferred_common_name
           ? `${taxon.preferred_common_name} (${taxon.name})`
           : taxon.name;
 
         return interaction.editReply(
-          `Found **${label}**, but couldn't find recent research-grade photos right now.`,
+          `Found **${label}**, but couldn't find photos right now.`,
         );
       }
 
@@ -99,7 +115,37 @@ export class PhotoCommands {
     return best ?? null;
   }
 
-  private async getRecentPhotos(taxonId: number, count: number): Promise<INatPhotoPick[]> {
+  private getTaxonPhotos(taxon: INatTaxon, count: number): INatPhotoPick[] {
+    const picks: INatPhotoPick[] = [];
+    const tp = taxon.taxon_photos || [];
+
+    for (const item of tp) {
+      const p = item?.photo;
+      if (!p?.url) continue;
+
+      // iNat often gives square/small urls; swap to large for Discord embeds
+      const imageUrl = String(p.url)
+        .replace("square", "large")
+        .replace("small", "large");
+
+      picks.push({
+        imageUrl,
+        attribution: p.attribution || "unknown",
+        license: p.license_code || "unknown",
+        // Link to the species page when using curated photos
+        obsUrl: `https://www.inaturalist.org/taxa/${taxon.id}`,
+      });
+
+      if (picks.length >= count) break;
+    }
+
+    return picks;
+  }
+
+  private async getRecentPhotos(
+    taxonId: number,
+    count: number,
+  ): Promise<INatPhotoPick[]> {
     const url = new URL("https://api.inaturalist.org/v1/observations");
     url.searchParams.set("taxon_id", String(taxonId));
     url.searchParams.set("quality_grade", "research");
@@ -117,7 +163,6 @@ export class PhotoCommands {
       for (const p of obs.photos || []) {
         if (!p?.url) continue;
 
-        // iNat often gives square/small urls; swap to large for Discord embeds
         const imageUrl = String(p.url)
           .replace("square", "large")
           .replace("small", "large");
