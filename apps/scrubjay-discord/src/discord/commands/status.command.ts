@@ -229,7 +229,7 @@ export class StatusCommand {
       .setDescription(county.label)
       .addFields(
         { name: "Observation frequency (30 days)", value: labelForCount(county.tier, count) },
-        { name: "Recent reports", value: String(count), inline: true },
+        { name: "Number of reports (checklists)", value: String(count), inline: true },
         { name: "Last reported", value: String(lastReported), inline: true },
         { name: "Trend", value: trendFromObsDates(data), inline: true },
         { name: "Recent locations", value: formatRecentLocations(data, 5) },
