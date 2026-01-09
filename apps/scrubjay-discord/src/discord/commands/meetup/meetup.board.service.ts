@@ -4,8 +4,8 @@ import {
   Client,
   TextChannel,
   type Message,
+  type ThreadChannel,
 } from "discord.js";
-import { sandboxConfig } from "./meetup.sandbox";
 
 export type MeetupStatus = "SCHEDULED" | "CANCELED" | "CLOSED";
 
@@ -22,14 +22,21 @@ export type StoredMeetup = {
   status: MeetupStatus;
 };
 
-const BOARD_HEADER = "📌 Upcoming Meetups";
+const BOARD_HEADER = "📌 Ongoing Meetup Threads";
 const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
+
+function cfg() {
+  return {
+    meetupChannelId: process.env.MEETUP_CHANNEL_ID,
+    boardChannelId: process.env.MEETUP_BOARD_CHANNEL_ID,
+  };
+}
 
 @Injectable()
 export class MeetupBoardService {
   private readonly logger = new Logger(MeetupBoardService.name);
 
-  // Sandbox MVP: in-memory store (swap to DB later)
+  // In-memory store (rebuilt from Discord on boot)
   private meetupsById = new Map<string, StoredMeetup>();
   private meetupIdByThreadId = new Map<string, string>();
 
@@ -51,24 +58,103 @@ export class MeetupBoardService {
     this.meetupsById.set(id, m);
   }
 
-  private listUpcoming(): StoredMeetup[] {
-    const now = Math.floor(Date.now() / 1000);
-    return [...this.meetupsById.values()]
-      .filter((m) => m.status === "SCHEDULED" && m.startUnix >= now - 6 * 60 * 60)
-      .sort((a, b) => a.startUnix - b.startUnix);
-  }
+  /**
+   * Rebuild memory by scanning threads under MEETUP_CHANNEL_ID.
+   * Source of truth = pinned meetup panel message (the one with RSVP buttons).
+   *
+   * Call this ONCE on boot (via @On("ready")).
+   */
+  public async rebuildFromDiscord(client: Client) {
+    const { meetupChannelId } = cfg();
 
-  public async renderToBoard(client: Client) {
-    const cfg = sandboxConfig();
-
-    const boardChannelId = cfg.boardChannelId ?? cfg.channelId;
-    if (!boardChannelId) {
-      throw new Error(
-        "Sandbox board channel id is missing. Set MEETUP_SANDBOX_BOARD_CHANNEL_ID or MEETUP_SANDBOX_CHANNEL_ID.",
-      );
+    if (!meetupChannelId) {
+      throw new Error("MEETUP_CHANNEL_ID is missing.");
     }
 
-    const ch = await client.channels.fetch(boardChannelId);
+    const ch = await client.channels.fetch(meetupChannelId);
+    if (!ch || ch.type !== ChannelType.GuildText) {
+      throw new Error("MEETUP_CHANNEL_ID is not a guild text channel.");
+    }
+    const parent = ch as TextChannel;
+
+    // Reset memory
+    this.meetupsById.clear();
+    this.meetupIdByThreadId.clear();
+
+    // Active threads under the parent channel
+    const active = await parent.threads.fetchActive();
+
+    // (Optional) include archived public threads so you can recover if Discord auto-archives
+    let archivedThreads: ThreadChannel[] = [];
+    try {
+      const archivedPublic = await parent.threads.fetchArchived({ type: "public" });
+      archivedThreads = [...archivedPublic.threads.values()];
+    } catch (e) {
+      this.logger.warn(`Could not fetch archived threads: ${e}`);
+    }
+
+    const threads = [...active.threads.values(), ...archivedThreads];
+
+    // Deduplicate by id
+    const seen = new Set<string>();
+    const uniqueThreads: ThreadChannel[] = [];
+    for (const t of threads) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      uniqueThreads.push(t);
+    }
+
+    for (const thread of uniqueThreads) {
+      // Skip ended threads (your cancel/close locks+archives)
+      if (thread.archived && thread.locked) continue;
+
+      const panel = await this.findPinnedMeetupPanel(thread);
+      if (!panel) continue;
+
+      const parsed = this.parsePanelText(panel.content ?? "");
+
+      const title = parsed.title ?? thread.name ?? "Meetup";
+      const location = parsed.location ?? "—";
+      const startUnix = parsed.startUnix ?? 0;
+
+      const guildId = thread.guild?.id;
+      if (!guildId) continue;
+
+      const creatorId = (thread as any).ownerId ?? "unknown";
+
+      // Use thread id as meetup id (stable across redeploys)
+      const meetupId = thread.id;
+
+      this.upsert({
+        id: meetupId,
+        guildId,
+        creatorId,
+        title,
+        location,
+        startUnix,
+        threadId: thread.id,
+        threadUrl: thread.url,
+        eventUrl: undefined,
+        status: "SCHEDULED",
+      });
+    }
+
+    this.logger.log(`Rebuilt meetups from Discord: ${this.meetupsById.size}`);
+  }
+
+  /**
+   * Render board using CURRENT in-memory meetups.
+   * (We do NOT rebuild here; that happens once on boot.)
+   */
+  public async renderToBoard(client: Client) {
+    const { boardChannelId, meetupChannelId } = cfg();
+
+    const channelId = boardChannelId ?? meetupChannelId;
+    if (!channelId) {
+      throw new Error("MEETUP_BOARD_CHANNEL_ID (or MEETUP_CHANNEL_ID fallback) is missing.");
+    }
+
+    const ch = await client.channels.fetch(channelId);
     if (!ch || ch.type !== ChannelType.GuildText) {
       throw new Error("Board channel is not a guild text channel.");
     }
@@ -80,26 +166,38 @@ export class MeetupBoardService {
     await boardMsg.edit({ content });
   }
 
+  private listOngoingThreads(): StoredMeetup[] {
+    // Optional filter so it doesn’t grow forever
+    const now = Math.floor(Date.now() / 1000);
+    const maxAgeDays = 14;
+    const minUnix = now - maxAgeDays * 24 * 60 * 60;
+
+    return [...this.meetupsById.values()]
+      .filter((m) => m.status === "SCHEDULED" && (m.startUnix === 0 || m.startUnix >= minUnix))
+      .sort((a, b) => {
+        if (a.startUnix && b.startUnix) return a.startUnix - b.startUnix;
+        if (a.startUnix && !b.startUnix) return -1;
+        if (!a.startUnix && b.startUnix) return 1;
+        return a.title.localeCompare(b.title);
+      });
+  }
+
   private buildBoardText() {
-    const upcoming = this.listUpcoming();
+    const ongoing = this.listOngoingThreads();
 
     const lines: string[] = [];
     lines.push(`${BOARD_HEADER} ${BOARD_TAG}`);
     lines.push("");
 
-    if (!upcoming.length) {
-      lines.push("• (No upcoming meetups)");
+    if (!ongoing.length) {
+      lines.push("• (No ongoing meetup threads)");
       return lines.join("\n");
     }
 
-    for (const m of upcoming) {
-      const when = `<t:${m.startUnix}:f>`;
-      const links: string[] = [];
-      if (m.threadUrl) links.push(`[Thread](${m.threadUrl})`);
-      if (m.eventUrl) links.push(`[Event](${m.eventUrl})`);
-
+    for (const m of ongoing) {
+      const when = m.startUnix ? `<t:${m.startUnix}:f>` : "(time unknown)";
       lines.push(`• ${when} — ${m.title} (${m.location})`);
-      lines.push(links.length ? `  ${links.join(" • ")}` : "  ");
+      lines.push(`  [Open thread](${m.threadUrl})`);
       lines.push("");
     }
 
@@ -112,9 +210,59 @@ export class MeetupBoardService {
     if (existing) return existing;
 
     const msg = await channel.send({
-      content: `${BOARD_HEADER} ${BOARD_TAG}\n\n• (No upcoming meetups)`,
+      content: `${BOARD_HEADER} ${BOARD_TAG}\n\n• (No ongoing meetup threads)`,
     });
     await msg.pin();
     return msg;
+  }
+
+  // =========================
+  // Panel detection + parsing
+  // =========================
+
+  private async findPinnedMeetupPanel(thread: ThreadChannel): Promise<Message | null> {
+    try {
+      const pinned = await thread.messages.fetchPinned();
+
+      // pinned message that has RSVP buttons (customId starts with meetup_rsvp:)
+      const panel = pinned.find((m) => this.messageHasRsvpButtons(m));
+      return panel ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private messageHasRsvpButtons(msg: Message): boolean {
+    try {
+      const rows = (msg as any).components ?? [];
+      for (const row of rows) {
+        const comps = row?.components ?? [];
+        for (const c of comps) {
+          const id = c?.customId ?? "";
+          if (typeof id === "string" && id.startsWith("meetup_rsvp:")) return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  private parsePanelText(text: string): { title?: string; location?: string; startUnix?: number } {
+    const out: { title?: string; location?: string; startUnix?: number } = {};
+
+    // Title line: 🗓️ **Title**
+    const titleMatch = text.match(/🗓️\s*\*\*(.+?)\*\*/);
+    if (titleMatch?.[1]) out.title = titleMatch[1].trim();
+
+    // Location line: 📍 **Where:** <location>
+    const locMatch = text.match(/📍\s*\*\*Where:\*\*\s*(.+)/);
+    if (locMatch?.[1]) out.location = locMatch[1].trim();
+
+    // Start time: first <t:UNIX:f>
+    const timeMatch = text.match(/<t:(\d+):f>/);
+    if (timeMatch?.[1]) out.startUnix = Number(timeMatch[1]);
+
+    return out;
   }
 }
