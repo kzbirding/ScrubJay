@@ -1011,4 +1011,41 @@ private async upsertAttendanceMessage(
 
     return lines.join("\n");
   }
+
+  @On("ready")
+public async onReady([client]: [any]) {
+  try {
+    this.logger.log("Meetup startup: rebuilding board cache…");
+    await this.board.rebuildFromDiscord(client);
+
+    const meetups = this.board.getAll();
+    this.logger.log(`Meetup startup: syncing attendance for ${meetups.length} meetups…`);
+
+    for (const m of meetups) {
+      if (!m?.threadId) continue;
+      if (m.status === "CANCELED" || m.status === "CLOSED") continue;
+
+      const ch = await client.channels.fetch(m.threadId).catch(() => null);
+      if (!ch) continue;
+
+      if (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread) continue;
+      const thread = ch as ThreadChannel;
+
+      if (thread.archived && thread.locked) continue;
+
+      const roleId = await this.getRsvpRoleIdFromThread(thread).catch(() => null);
+      if (!roleId) continue;
+
+      await this.upsertAttendanceMessage(thread, m.guildId, roleId).catch(() => null);
+
+      // micro-throttle: avoid burst requests at startup
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    this.logger.log("Meetup startup: attendance sync complete.");
+  } catch (e) {
+    this.logger.warn(`Startup attendance sync failed (ok): ${e}`);
+  }
+}
+
 }

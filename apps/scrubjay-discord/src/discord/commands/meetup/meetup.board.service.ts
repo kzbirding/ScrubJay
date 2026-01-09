@@ -25,6 +25,10 @@ export type StoredMeetup = {
 const BOARD_HEADER = "📌 Ongoing Meetup Threads";
 const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
 
+// These are the pinned-message tags inside meetup threads
+const THREAD_PANEL_TAG = "[SCRUBJAY_MEETUP_THREAD_PANEL]";
+const ATTENDANCE_TAG = "[SCRUBJAY_MEETUP_ATTENDANCE]";
+
 function reqEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -57,9 +61,16 @@ export class MeetupBoardService {
     this.meetupsById.set(id, m);
   }
 
+  public getAll(): StoredMeetup[] {
+    return [...this.meetupsById.values()];
+  }
+
   /**
    * Rebuild memory by scanning threads under the configured MEETUP_CHANNEL_ID.
-   * Source of truth = thread starter message (contains meetup_rsvp buttons).
+   * Source of truth = pinned ScrubJay tags inside the thread (panel/attendance).
+   *
+   * Note: thread starter message is the parent-channel message (no buttons now),
+   * but it still contains the structured panel text used for parsing.
    */
   public async rebuildFromDiscord(client: Client) {
     const meetupChannelId = reqEnv("MEETUP_CHANNEL_ID");
@@ -101,13 +112,15 @@ export class MeetupBoardService {
       // Skip ended threads (your cancel/close locks+archives)
       if (thread.archived && thread.locked) continue;
 
+      // ✅ Identify meetups by pinned ScrubJay tags (cheapest, never misses)
+      const isMeetup = await this.threadHasScrubJayPins(thread);
+      if (!isMeetup) continue;
+
+      // Starter message is the parent message. It may exist and contains details.
       const starterMsg = await thread.fetchStarterMessage().catch(() => null);
-      if (!starterMsg) continue;
 
-      // Only treat as meetup if starter has RSVP buttons
-      if (!this.messageHasRsvpButtons(starterMsg as any)) continue;
-
-      const parsed = this.parsePanelText(starterMsg.content ?? "");
+      // Parse details from starter message if available; fallback to thread name.
+      const parsed = this.parsePanelText(starterMsg?.content ?? "");
       const title = parsed.title ?? thread.name ?? "Meetup";
       const location = parsed.location ?? "—";
       const startUnix = parsed.startUnix ?? 0;
@@ -194,6 +207,27 @@ export class MeetupBoardService {
     }
 
     return lines.join("\n").trimEnd();
+  }
+
+  // ✅ Only pinned messages; tags are guaranteed for every meetup thread
+  private async threadHasScrubJayPins(thread: ThreadChannel): Promise<boolean> {
+    try {
+      const pinned = await thread.messages.fetchPinned().catch(() => null);
+      if (!pinned) return false;
+
+      for (const m of pinned.values()) {
+        const content = m.content ?? "";
+        if (content.includes(THREAD_PANEL_TAG)) return true;
+        if (content.includes(ATTENDANCE_TAG)) return true;
+
+        // optional extra safety: if pinned RSVP buttons message exists, accept too
+        if (this.messageHasRsvpButtons(m as any)) return true;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   private messageHasRsvpButtons(msg: Message): boolean {
