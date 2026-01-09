@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import {
   ChannelType,
+  PermissionsBitField,
   type TextChannel,
   type ThreadChannel,
 } from "discord.js";
@@ -16,9 +17,22 @@ function makeId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function extractMeetupIdFromText(text: string): string | null {
-  const m = text.match(/SCRUBJAY_MEETUP_ID:([a-zA-Z0-9_]+)/);
-  return m?.[1] ?? null;
+function canManageThread(interaction: any, thread: ThreadChannel): boolean {
+  const member = interaction.member;
+  if (!member) return false;
+
+  // discord.js exposes PermissionsBitField on GuildMember
+  const perms = thread.permissionsFor(member);
+  return Boolean(perms?.has(PermissionsBitField.Flags.ManageThreads));
+}
+
+function isThreadOwner(interaction: any, thread: ThreadChannel): boolean {
+  const ownerId = (thread as any).ownerId as string | null | undefined;
+  return Boolean(ownerId && interaction.user?.id === ownerId);
+}
+
+function canCancelOrClose(interaction: any, thread: ThreadChannel): boolean {
+  return isThreadOwner(interaction, thread) || canManageThread(interaction, thread);
 }
 
 @Injectable()
@@ -103,13 +117,10 @@ export class MeetupCommands {
       }
       const textChannel = channel as TextChannel;
 
-      const meetupId = makeId();
+      const meetupId = makeId(); // still used for in-memory board tracking
 
-      // 1) Post starter message in sandbox channel (+ hidden marker for restart-safe lookup)
-      const starterText =
-        this.buildThreadStarter(options, startUnix, endUnix) +
-        `\n\n||SCRUBJAY_MEETUP_ID:${meetupId}||`;
-
+      // 1) Post starter message (NO hidden ID marker)
+      const starterText = this.buildThreadStarter(options, startUnix, endUnix);
       const starterMsg = await textChannel.send({ content: starterText });
 
       // 2) Create thread
@@ -159,7 +170,7 @@ export class MeetupCommands {
 
       return interaction.editReply(
         [
-          "✅ Meetup created (sandbox).",
+          "✅ Meetup created.",
           `Thread: ${thread.url}`,
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
           "",
@@ -169,38 +180,6 @@ export class MeetupCommands {
     } catch (err: any) {
       this.logger.error(`Meetup create failed: ${err}`);
       return interaction.editReply(err?.message ?? "Meetup create failed.");
-    }
-  }
-
-  private async getMeetupFromThreadOrPinnedMarker(
-    thread: ThreadChannel,
-  ): Promise<
-    | {
-        id: string;
-        creatorId: string;
-      }
-    | null
-  > {
-    // First try in-memory lookup
-    const fromMem = this.board.getByThreadId(thread.id);
-    if (fromMem) return { id: fromMem.id, creatorId: fromMem.creatorId };
-
-    // Fallback: parse pinned starter message marker
-    try {
-      const pinned = await thread.messages.fetchPinned();
-      const markerMsg = pinned.find((m) =>
-        (m.content || "").includes("SCRUBJAY_MEETUP_ID:"),
-      );
-
-      const meetupId = markerMsg ? extractMeetupIdFromText(markerMsg.content || "") : null;
-      if (!meetupId) return null;
-
-      // We can't recover creatorId reliably without DB, so we use the thread owner check later.
-      // For sandbox testing, we allow the invoker if they have ManageThreads OR they are the invoker (default).
-      // Here we return creatorId as empty and handle it safely in the caller.
-      return { id: meetupId, creatorId: "" };
-    } catch {
-      return null;
     }
   }
 
@@ -228,28 +207,18 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    const meetupLite = await this.getMeetupFromThreadOrPinnedMarker(thread);
-    if (!meetupLite) {
+    // ✅ Permission rule: thread owner OR Manage Threads
+    if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
-        content:
-          "I can’t find meetup metadata for this thread (likely a restart before it was stored). Recreate the meetup, or we need DB persistence.",
-      });
-    }
-
-    // Creator check:
-    // - If we found creatorId in memory, enforce it.
-    // - If we recovered from pinned marker (creatorId=""), allow the invoker in sandbox.
-    if (meetupLite.creatorId && interaction.user.id !== meetupLite.creatorId) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "Only the meetup creator can cancel this meetup (sandbox rule).",
+        content: "Only the thread creator or a moderator can cancel this meetup.",
       });
     }
 
     await interaction.deferReply({ ephemeral: true });
 
     try {
+      // Ensure we can post even if archived/locked
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post cancel message");
       }
@@ -259,15 +228,17 @@ export class MeetupCommands {
 
       await thread.send("❌ **This meetup has been canceled.**");
 
-      await thread.setLocked(true, "Meetup canceled (sandbox)");
-      await thread.setArchived(true, "Meetup canceled (sandbox)");
+      await thread.setLocked(true, "Meetup canceled");
+      await thread.setArchived(true, "Meetup canceled");
 
-      // If the meetup exists in memory, update status + board.
-      // If it was only recovered from a marker, the board may already be out of sync (expected until DB).
-      this.board.setStatus(meetupLite.id, "CANCELED");
-      await this.board.renderToBoard(interaction.client);
+      // Best-effort board update (only works if still in-memory)
+      const m = this.board.getByThreadId(thread.id);
+      if (m) {
+        this.board.setStatus(m.id, "CANCELED");
+        await this.board.renderToBoard(interaction.client);
+      }
 
-      return interaction.editReply("✅ Canceled. Thread archived/locked and removed from the board.");
+      return interaction.editReply("✅ Canceled. Thread archived/locked.");
     } catch (err: any) {
       this.logger.error(`Meetup cancel failed: ${err}`);
       return interaction.editReply(err?.message ?? "Cancel failed.");
@@ -298,19 +269,11 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    const meetupLite = await this.getMeetupFromThreadOrPinnedMarker(thread);
-    if (!meetupLite) {
+    // ✅ Permission rule: thread owner OR Manage Threads
+    if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
-        content:
-          "I can’t find meetup metadata for this thread (likely a restart before it was stored). Recreate the meetup, or we need DB persistence.",
-      });
-    }
-
-    if (meetupLite.creatorId && interaction.user.id !== meetupLite.creatorId) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "Only the meetup creator can close this meetup (sandbox rule).",
+        content: "Only the thread creator or a moderator can close this meetup.",
       });
     }
 
@@ -326,13 +289,16 @@ export class MeetupCommands {
 
       await thread.send("✅ **This meetup has been marked as completed.**");
 
-      await thread.setLocked(true, "Meetup closed (sandbox)");
-      await thread.setArchived(true, "Meetup closed (sandbox)");
+      await thread.setLocked(true, "Meetup closed");
+      await thread.setArchived(true, "Meetup closed");
 
-      this.board.setStatus(meetupLite.id, "CLOSED");
-      await this.board.renderToBoard(interaction.client);
+      const m = this.board.getByThreadId(thread.id);
+      if (m) {
+        this.board.setStatus(m.id, "CLOSED");
+        await this.board.renderToBoard(interaction.client);
+      }
 
-      return interaction.editReply("✅ Closed. Thread archived/locked and removed from the board.");
+      return interaction.editReply("✅ Closed. Thread archived/locked.");
     } catch (err: any) {
       this.logger.error(`Meetup close failed: ${err}`);
       return interaction.editReply(err?.message ?? "Close failed.");
@@ -346,7 +312,7 @@ export class MeetupCommands {
     if (options.notes) lines.push(`Notes: ${options.notes}`);
     lines.push("");
     lines.push(
-      "Safety: 18+ only. No personal info required. No bot DMs. Keep coordination in the thread.",
+      "Safety: 18+ only. No personal info required. No DMs. Keep coordination in the thread.",
     );
     return lines.join("\n").slice(0, 900);
   }
@@ -368,7 +334,7 @@ export class MeetupCommands {
     lines.push("");
     lines.push("🛡️ **Safety / Rules**");
     lines.push("• 18+ only. No personal info required (no names/phone numbers).");
-    lines.push("• No bot DMs. Keep coordination in this thread.");
+    lines.push("• No DMs. Keep coordination in this thread.");
     lines.push("• Use good judgment; moderators may intervene for safety.");
     lines.push("");
     lines.push("✅ RSVP tools may appear here later (sandbox MVP).");
