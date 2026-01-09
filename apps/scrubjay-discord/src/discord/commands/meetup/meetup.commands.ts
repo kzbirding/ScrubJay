@@ -186,6 +186,43 @@ export class MeetupCommands {
     }
   }
 
+// =========================
+// Startup sync (refresh attendance after deploy)
+// =========================
+@On("ready")
+public async onReady([client]: [any]) {
+  try {
+    this.logger.log("Meetup startup: syncing attendance…");
+
+    const meetups = this.board.getAll?.() ?? [];
+    for (const m of meetups) {
+      if (!m?.threadId) continue;
+      if (m.status === "CANCELED" || m.status === "CLOSED") continue;
+
+      const ch = await client.channels.fetch(m.threadId).catch(() => null);
+      if (!ch) continue;
+
+      if (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread) continue;
+      const thread = ch as ThreadChannel;
+
+      if (thread.archived && thread.locked) continue;
+
+      const roleId = await this.getRsvpRoleIdFromThread(thread).catch(() => null);
+      if (!roleId) continue;
+
+      await this.upsertAttendanceMessage(thread, m.guildId, roleId).catch(() => null);
+
+      // micro-throttle: avoid burst requests at startup
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    this.logger.log("Meetup startup: attendance sync complete.");
+  } catch (e) {
+    this.logger.warn(`Startup attendance sync failed (ok): ${e}`);
+  }
+}
+
+
   // =========================
   // Commands
   // =========================
@@ -746,30 +783,39 @@ export class MeetupCommands {
     return lines.join("\n");
   }
 
-  private async upsertAttendanceMessage(thread: ThreadChannel, _guildId: string, roleId: string) {
-    const guild = thread.guild;
-    if (!guild) return;
+private async upsertAttendanceMessage(
+  thread: ThreadChannel,
+  _guildId: string,
+  roleId: string,
+) {
+  const guild = thread.guild;
+  if (!guild) return;
 
-    const role = await guild.roles.fetch(roleId).catch(() => null);
-    if (!role) return;
+  // ✅ Populate member cache (cheap at ~70 members)
+  await guild.members.fetch().catch(() => null);
 
-    const mentions = [...role.members.values()]
-      .sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""))
-      .map((m) => `<@${m.id}>`);
+  const mentions = [...guild.members.cache.values()]
+    .filter((m) => m.roles?.cache?.has(roleId))
+    .sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""))
+    .map((m) => `<@${m.id}>`);
 
-    const content = this.buildAttendanceText(mentions);
+  const existing = await this.findAttendanceMessage(thread);
 
-    const existing = await this.findAttendanceMessage(thread);
+  // 🛡️ Safety: never overwrite a non-empty list with an empty one
+  if (existing && mentions.length === 0) return;
 
-    if (existing) {
-      await existing.edit({ content }).catch(() => null);
-      await existing.pin().catch(() => null);
-      return;
-    }
+  const content = this.buildAttendanceText(mentions);
 
-    const created = await thread.send({ content }).catch(() => null);
-    if (created) await created.pin().catch(() => null);
+  if (existing) {
+    await existing.edit({ content }).catch(() => null);
+    await existing.pin().catch(() => null);
+    return;
   }
+
+  const created = await thread.send({ content }).catch(() => null);
+  if (created) await created.pin().catch(() => null);
+}
+
 
   // =========================
   // Thread panel (pinned inside the thread)
