@@ -44,9 +44,55 @@ function validateFutureTimes(startUnix: number, endUnix?: number): string | null
   return null;
 }
 
-function extractRoleIdMarker(text: string): string | null {
-  const m = text.match(/RSVP_ROLE_ID:([0-9]+)/);
-  return m?.[1] ?? null;
+function buildRsvpRow(roleId: string) {
+  // Encode roleId into the customId so we don't depend on pins/markers.
+  // format: meetup_rsvp:<action>:<roleId>
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`meetup_rsvp:go:${roleId}`)
+      .setLabel("✅ Going")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(`meetup_rsvp:maybe:${roleId}`)
+      .setLabel("🤔 Maybe")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`meetup_rsvp:no:${roleId}`)
+      .setLabel("❌ Not going")
+      .setStyle(ButtonStyle.Danger),
+  );
+}
+
+function parseRsvpCustomId(
+  customId: string,
+): { action: "go" | "maybe" | "no"; roleId: string } | null {
+  if (!customId.startsWith("meetup_rsvp:")) return null;
+  const parts = customId.split(":");
+  // ["meetup_rsvp", "<action>", "<roleId>"]
+  if (parts.length !== 3) return null;
+  const action = parts[1] as any;
+  const roleId = parts[2];
+
+  if (action !== "go" && action !== "maybe" && action !== "no") return null;
+  if (!/^\d+$/.test(roleId)) return null;
+
+  return { action, roleId };
+}
+
+function getRoleIdFromStarterMessageComponents(msg: any): string | null {
+  try {
+    const comps = msg?.components ?? [];
+    for (const row of comps) {
+      const rowComps = row?.components ?? [];
+      for (const c of rowComps) {
+        const parsed = parseRsvpCustomId(c?.customId ?? "");
+        if (parsed?.roleId) return parsed.roleId;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 @Injectable()
@@ -65,37 +111,20 @@ export class MeetupCommands {
       if (!i?.isButton?.()) return;
 
       const bi = i as ButtonInteraction;
-      const id = bi.customId || "";
+      const parsed = parseRsvpCustomId(bi.customId || "");
+      if (!parsed) return;
 
-      if (!id.startsWith("meetup_rsvp:")) return;
-
-      // customId format: meetup_rsvp:<action>
-      const [, action] = id.split(":");
-
-      // must be used inside a thread
-      const ch = bi.channel;
-      if (
-        !ch ||
-        (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)
-      ) {
-        return bi.reply({ ephemeral: true, content: "RSVP buttons only work in meetup threads." });
-      }
-
-      const thread = ch as ThreadChannel;
-
-      // Find the RSVP role id from the RSVP panel message (pinned)
-      const roleId = await this.findRsvpRoleIdInThread(thread);
-      if (!roleId) {
-        return bi.reply({
-          ephemeral: true,
-          content: "RSVP role not found for this meetup (ask a mod to recreate the meetup).",
-        });
+      // Must be in a guild (roles)
+      if (!bi.guild) {
+        return bi.reply({ ephemeral: true, content: "RSVP only works in a server." });
       }
 
       const member = bi.member as any;
       if (!member?.roles) {
         return bi.reply({ ephemeral: true, content: "Couldn’t access your server roles." });
       }
+
+      const { action, roleId } = parsed;
 
       if (action === "go") {
         await member.roles.add(roleId).catch(() => null);
@@ -107,18 +136,12 @@ export class MeetupCommands {
         return bi.reply({ ephemeral: true, content: "❌ You’re marked as **Not going**." });
       }
 
-      // maybe = no role (just a lightweight response)
-      if (action === "maybe") {
-        // ensure they don't have the ping role
-        await member.roles.remove(roleId).catch(() => null);
-        return bi.reply({ ephemeral: true, content: "🤔 You’re marked as **Maybe** (no pings)." });
-      }
-
-      return bi.reply({ ephemeral: true, content: "Unknown RSVP action." });
+      // maybe = no role (no pings)
+      await member.roles.remove(roleId).catch(() => null);
+      return bi.reply({ ephemeral: true, content: "🤔 You’re marked as **Maybe** (no pings)." });
     } catch (e) {
       this.logger.warn(`RSVP interaction failed: ${e}`);
       try {
-        // avoid “interaction failed” banner
         if (typeof (e as any)?.deferred === "boolean") return;
       } catch {}
     }
@@ -142,7 +165,7 @@ export class MeetupCommands {
         options.endTime,
       );
 
-      const starter = this.buildThreadStarter(options, startUnix, endUnix);
+      const starter = this.buildThreadStarter(options, startUnix, endUnix, null);
 
       return interaction.reply({
         ephemeral: true,
@@ -200,26 +223,33 @@ export class MeetupCommands {
       }
       const textChannel = channel as TextChannel;
 
+      // 0) Create RSVP role FIRST (required)
+      const rsvpRoleId = await this.createRsvpRole(interaction, options);
+      if (!rsvpRoleId) {
+        return interaction.editReply(
+          "I couldn’t create the RSVP role. The bot likely needs **Manage Roles** (and its role must be above the roles it creates).",
+        );
+      }
+
       const meetupId = makeId();
 
-      // 1) Post starter message
-      const starterText = this.buildThreadStarter(options, startUnix, endUnix);
-      const starterMsg = await textChannel.send({ content: starterText });
+      // 1) Starter message WITH RSVP info + buttons (this becomes the thread starter)
+      const starterText = this.buildThreadStarter(options, startUnix, endUnix, rsvpRoleId);
+      const rsvpRow = buildRsvpRow(rsvpRoleId);
 
-      // 2) Create thread
+      const starterMsg = await textChannel.send({
+        content: starterText,
+        components: [rsvpRow],
+      });
+
+      // 2) Create thread from the starter message (so RSVP is at the top of the thread)
       const thread = await starterMsg.startThread({
         name: `Meetup • ${options.title}`.slice(0, 100),
         autoArchiveDuration: 1440,
         reason: "ScrubJay meetup create",
       });
 
-      await starterMsg.pin();
-
-      // 2.5) AUTO: Create RSVP role + post RSVP panel (required)
-      const rsvpRoleId = await this.createRsvpRole(interaction, options);
-      if (rsvpRoleId) {
-        await this.postRsvpPanel(thread, rsvpRoleId, options);
-      }
+      await starterMsg.pin().catch(() => null);
 
       // 3) Try scheduled event (if perms missing, we continue)
       let eventUrl: string | undefined;
@@ -263,7 +293,7 @@ export class MeetupCommands {
           `Thread: ${thread.url}`,
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
           "",
-          "RSVP panel posted automatically in the thread.",
+          "RSVP buttons are on the first message in the thread.",
           "Run `/meetup edit`, `/meetup cancel`, or `/meetup close` inside the thread.",
         ].join("\n"),
       );
@@ -314,20 +344,29 @@ export class MeetupCommands {
       const timeErr = validateFutureTimes(startUnix, endUnix);
       if (timeErr) return interaction.editReply(timeErr);
 
-      // Update starter message (null-safe)
       const starterMsg = await thread.fetchStarterMessage();
       if (!starterMsg) {
         return interaction.editReply(
           "I couldn't find the thread starter message to edit (it may have been deleted).",
         );
       }
-      const newStarterText = this.buildThreadStarter(options, startUnix, endUnix);
-      await starterMsg.edit({ content: newStarterText });
 
-      // Rename thread to match
+      // Keep the same RSVP role + buttons
+      const existingRoleId = getRoleIdFromStarterMessageComponents(starterMsg);
+      if (!existingRoleId) {
+        return interaction.editReply(
+          "I couldn’t find the RSVP buttons on the starter message. (They may have been removed.)",
+        );
+      }
+
+      const newStarterText = this.buildThreadStarter(options, startUnix, endUnix, existingRoleId);
+      await starterMsg.edit({
+        content: newStarterText,
+        components: [buildRsvpRow(existingRoleId)],
+      });
+
       await thread.setName(`Meetup • ${options.title}`.slice(0, 100));
 
-      // Best-effort: update in-memory record + board
       const m = this.board.getByThreadId(thread.id);
       if (m) {
         this.board.upsert({
@@ -339,7 +378,6 @@ export class MeetupCommands {
         await this.board.renderToBoard(interaction.client);
       }
 
-      // Best-effort: update scheduled event if we have eventUrl + perms
       if (m?.eventUrl && interaction.guild) {
         try {
           const parts = m.eventUrl.split("/");
@@ -349,7 +387,7 @@ export class MeetupCommands {
           await event.edit({
             name: options.title.slice(0, 100),
             scheduledStartTime: new Date(startUnix * 1000),
-            scheduledEndTime: endUnix ? new Date(endUnix * 1000) : undefined, // <-- FIX
+            scheduledEndTime: endUnix ? new Date(endUnix * 1000) : undefined,
             entityMetadata: { location: options.location.slice(0, 100) },
             description: this.buildEventDescription(options),
           });
@@ -358,7 +396,7 @@ export class MeetupCommands {
         }
       }
 
-      await thread.send("✏️ **Meetup details updated.**");
+      await thread.send("✏️ **Meetup details updated.**").catch(() => null);
 
       return interaction.editReply("✅ Updated.");
     } catch (err: any) {
@@ -396,9 +434,7 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Delete RSVP role first (best-effort)
-      await this.deleteRsvpRoleIfPresent(interaction, thread);
-
+      // Ensure we can post even if archived/locked
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post cancel message");
       }
@@ -406,7 +442,25 @@ export class MeetupCommands {
         await thread.setLocked(false, "Temporarily unlock to post cancel message");
       }
 
-      await thread.send("❌ **This meetup has been canceled.**");
+      // Find RSVP role from starter message so we can @ it BEFORE deleting
+      const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+      const roleId = starterMsg ? getRoleIdFromStarterMessageComponents(starterMsg) : null;
+
+      const canceledBy = `<@${interaction.user.id}>`;
+      const pingLine = roleId ? `<@&${roleId}>` : "";
+
+      const cancelMsgLines = [
+        roleId ? pingLine : null,
+        `❌ **This meetup has been canceled.**`,
+        `Canceled by: ${canceledBy}`,
+        "",
+        "If you had planned to attend, thanks for checking — keep an eye out for the next one.",
+      ].filter(Boolean);
+
+      await thread.send(cancelMsgLines.join("\n")).catch(() => null);
+
+      // Now delete RSVP role (best-effort)
+      await this.deleteRsvpRoleFromStarterMessageIfPresent(interaction, thread);
 
       await thread.setLocked(true, "Meetup canceled");
       await thread.setArchived(true, "Meetup canceled");
@@ -453,8 +507,7 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Delete RSVP role first (best-effort)
-      await this.deleteRsvpRoleIfPresent(interaction, thread);
+      await this.deleteRsvpRoleFromStarterMessageIfPresent(interaction, thread);
 
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post close message");
@@ -463,7 +516,7 @@ export class MeetupCommands {
         await thread.setLocked(false, "Temporarily unlock to post close message");
       }
 
-      await thread.send("✅ **This meetup has been marked as completed.**");
+      await thread.send("✅ **This meetup has been marked as completed.**").catch(() => null);
 
       await thread.setLocked(true, "Meetup closed");
       await thread.setArchived(true, "Meetup closed");
@@ -499,59 +552,20 @@ export class MeetupCommands {
 
       return role.id;
     } catch (e) {
-      this.logger.warn(`RSVP role create failed (missing perms ok): ${e}`);
+      this.logger.warn(`RSVP role create failed: ${e}`);
       return null;
     }
   }
 
-  private async postRsvpPanel(thread: ThreadChannel, roleId: string, options: MeetupCreateDto) {
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder()
-        .setCustomId("meetup_rsvp:go")
-        .setLabel("✅ Going")
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId("meetup_rsvp:maybe")
-        .setLabel("🤔 Maybe")
-        .setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder()
-        .setCustomId("meetup_rsvp:no")
-        .setLabel("❌ Not going")
-        .setStyle(ButtonStyle.Danger),
-    );
-
-    const content = [
-      "🗓️ **RSVP for this meetup**",
-      "",
-      `✅ **Going** → get the ping role (<@&${roleId}>)`,
-      "🤔 **Maybe** → no pings",
-      "❌ **Not going** → removes the ping role",
-      "",
-      "Mods/organizer can ping attendees with the role mention above.",
-      `||RSVP_ROLE_ID:${roleId}||`,
-    ].join("\n");
-
-    const msg = await thread.send({ content, components: [row] });
-    await msg.pin().catch(() => null);
-  }
-
-  private async findRsvpRoleIdInThread(thread: ThreadChannel): Promise<string | null> {
-    try {
-      const pinned = await thread.messages.fetchPinned();
-      const msg = pinned.find((m) => (m.content || "").includes("RSVP_ROLE_ID:"));
-      if (!msg) return null;
-      return extractRoleIdMarker(msg.content || "");
-    } catch {
-      return null;
-    }
-  }
-
-  private async deleteRsvpRoleIfPresent(interaction: any, thread: ThreadChannel) {
+  private async deleteRsvpRoleFromStarterMessageIfPresent(interaction: any, thread: ThreadChannel) {
     try {
       const guild = interaction.guild;
       if (!guild) return;
 
-      const roleId = await this.findRsvpRoleIdInThread(thread);
+      const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+      if (!starterMsg) return;
+
+      const roleId = getRoleIdFromStarterMessageComponents(starterMsg);
       if (!roleId) return;
 
       const role = await guild.roles.fetch(roleId).catch(() => null);
@@ -581,7 +595,8 @@ export class MeetupCommands {
   private buildThreadStarter(
     options: MeetupPreviewDto,
     startUnix: number,
-    endUnix?: number,
+    endUnix: number | undefined,
+    rsvpRoleId: string | null,
   ) {
     const lines: string[] = [];
 
@@ -592,13 +607,23 @@ export class MeetupCommands {
     lines.push(`📍 **Where:** ${options.location}`);
     if (options.skillLevel) lines.push(`🎯 **Skill level:** ${options.skillLevel}`);
     if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
+
     lines.push("");
     lines.push("🛡️ **Safety / Rules**");
     lines.push("• 18+ only. No personal info required (no names/phone numbers).");
     lines.push("• No DMs. Keep coordination in this thread.");
     lines.push("• Use good judgment; moderators may intervene for safety.");
+
     lines.push("");
-    lines.push("✅ RSVP tools will appear below.");
+    lines.push("✅ **RSVP (use the buttons below)**");
+    if (rsvpRoleId) {
+      lines.push(`• **Going** = you get the ping role: <@&${rsvpRoleId}>`);
+      lines.push("• **Maybe** = no pings");
+      lines.push("• **Not going** = removes the ping role");
+      lines.push("• Organizer/mods can ping attendees by mentioning the role above.");
+    } else {
+      lines.push("• (Preview only) RSVP role will be created automatically on real meetups.");
+    }
 
     return lines.join("\n");
   }
