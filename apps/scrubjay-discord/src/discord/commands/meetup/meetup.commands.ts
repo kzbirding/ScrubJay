@@ -13,7 +13,7 @@ import {
 import { Context, On, Options, Subcommand, type SlashCommandContext } from "necord";
 
 import { MeetupCommand } from "./meetup.decorator";
-import { MeetupCreateDto, MeetupPreviewDto } from "./meetup.dto";
+import { MeetupCreateDto } from "./meetup.dto";
 import { parseMeetupTimes } from "./meetup.time";
 import { MeetupBoardService } from "./meetup.board.service";
 
@@ -118,7 +118,7 @@ function getOrganizerIdFromPanelText(text: string): string | null {
 }
 
 // Helper: build unique role name from meetup inputs
-function buildRsvpRoleNameFromOptions(options: MeetupCreateDto | MeetupPreviewDto): string {
+function buildRsvpRoleNameFromOptions(options: MeetupCreateDto): string {
   const roleDate = (() => {
     const [y, m, d] = (options.date || "").split("-");
     if (!y || !m || !d) return (options.date || "").trim();
@@ -190,56 +190,6 @@ export class MeetupCommands {
   // Commands
   // =========================
   @Subcommand({
-    name: "preview",
-    description: "Preview a meetup (no changes made)",
-  })
-  public async onPreview(
-    @Context() [interaction]: SlashCommandContext,
-    @Options() options: MeetupPreviewDto,
-  ) {
-    try {
-      const { startUnix, endUnix } = parseMeetupTimes(
-        options.date,
-        options.startTime,
-        options.endTime,
-      );
-
-      const starter = this.buildMeetupPanelText(
-        options,
-        startUnix,
-        endUnix,
-        null,
-        interaction.user?.id ?? null,
-        null,
-      );
-
-      return interaction.reply({
-        ephemeral: true,
-        content:
-          [
-            "**Meetup Preview (no changes made)**",
-            `**Title:** ${options.title}`,
-            `**When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
-            `**Location:** ${options.location}`,
-            options.notes ? `**Notes:** ${options.notes}` : null,
-            "",
-            "**Meetup panel text (what will be posted as the RSVP message):**",
-            "```",
-            starter.length > 1800 ? starter.slice(0, 1800) + "…" : starter,
-            "```",
-          ]
-            .filter(Boolean)
-            .join("\n"),
-      });
-    } catch (e: any) {
-      return interaction.reply({
-        ephemeral: true,
-        content: e?.message ?? "Invalid meetup input.",
-      });
-    }
-  }
-
-  @Subcommand({
     name: "create",
     description: "Create a meetup",
   })
@@ -275,6 +225,16 @@ export class MeetupCommands {
         return interaction.editReply(
           "I couldn’t create the RSVP role. The bot likely needs **Manage Roles** (and its role must be above the roles it creates).",
         );
+      }
+
+      // ✅ Auto-add organizer to Going (adds role)
+      try {
+        const organizerMember = interaction.member as any;
+        if (organizerMember?.roles?.add) {
+          await organizerMember.roles.add(rsvpRoleId).catch(() => null);
+        }
+      } catch (e) {
+        this.logger.warn(`Could not auto-add organizer to RSVP role (ok): ${e}`);
       }
 
       const meetupId = makeId();
@@ -320,7 +280,7 @@ export class MeetupCommands {
         this.buildThreadPanelText(options, startUnix, endUnix, rsvpRoleId, organizerId, starterMsg.url),
       );
 
-      // 4) Attendance message (pins itself)
+      // 4) Attendance message (pins itself) — organizer will now appear because they have the role
       await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
 
       // Try scheduled event (best-effort)
@@ -366,6 +326,7 @@ export class MeetupCommands {
           "",
           "RSVP buttons are on the meetup message in the channel.",
           "The meetup panel + attendance list are pinned inside the thread.",
+          "Organizer auto-added to Going.",
           "Run `/meetup edit`, `/meetup cancel`, or `/meetup close` inside the thread.",
         ].join("\n"),
       );
@@ -440,7 +401,6 @@ export class MeetupCommands {
 
       const rsvpMessageUrl = (starterMsg as any)?.url ?? null;
 
-      // Update the PARENT RSVP message content (buttons remain here)
       const newRsvpText = this.buildMeetupPanelText(
         options,
         startUnix,
@@ -455,7 +415,6 @@ export class MeetupCommands {
         components: [buildRsvpRow(existingRoleId)],
       });
 
-      // Update the THREAD pinned panel message (no buttons)
       await this.upsertThreadPanelMessage(
         thread,
         this.buildThreadPanelText(
@@ -839,7 +798,7 @@ export class MeetupCommands {
   }
 
   private buildThreadPanelText(
-    options: MeetupPreviewDto,
+    options: MeetupCreateDto,
     startUnix: number,
     endUnix: number | undefined,
     rsvpRoleId: string | null,
@@ -873,7 +832,7 @@ export class MeetupCommands {
   // =========================
   // Text builders (parent RSVP message)
   // =========================
-  private buildEventDescription(options: MeetupPreviewDto) {
+  private buildEventDescription(options: MeetupCreateDto) {
     const lines: string[] = [];
     lines.push("ScrubJay Meetup");
     if (options.notes) lines.push(`Notes: ${options.notes}`);
@@ -885,7 +844,7 @@ export class MeetupCommands {
   }
 
   private buildMeetupPanelText(
-    options: MeetupPreviewDto,
+    options: MeetupCreateDto,
     startUnix: number,
     endUnix: number | undefined,
     rsvpRoleId: string | null,
