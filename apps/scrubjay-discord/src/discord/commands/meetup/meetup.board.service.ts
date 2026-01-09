@@ -23,6 +23,8 @@ const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
 @Injectable()
 export class MeetupBoardService {
   private readonly logger = new Logger(MeetupBoardService.name);
+
+  // Sandbox MVP: in-memory store (we’ll swap to DB later)
   private meetups = new Map<string, BoardMeetup>();
 
   public upsert(meetup: BoardMeetup) {
@@ -33,19 +35,27 @@ export class MeetupBoardService {
     this.meetups.delete(id);
   }
 
-  public listUpcoming(): BoardMeetup[] {
+  private listUpcoming(): BoardMeetup[] {
     const now = Math.floor(Date.now() / 1000);
     return [...this.meetups.values()]
-      .filter((m) => m.status === "SCHEDULED" && m.startUnix >= now - 60 * 60 * 6)
+      // show upcoming, plus allow a small past buffer so it doesn’t vanish instantly
+      .filter((m) => m.status === "SCHEDULED" && m.startUnix >= now - 6 * 60 * 60)
       .sort((a, b) => a.startUnix - b.startUnix);
   }
 
   public async renderToBoard(client: Client) {
-    const { boardChannelId } = sandboxConfig();
+    const cfg = sandboxConfig();
+
+    const boardChannelId = cfg.boardChannelId ?? cfg.channelId;
+    if (!boardChannelId) {
+      throw new Error(
+        "Sandbox board channel id is missing. Set MEETUP_SANDBOX_BOARD_CHANNEL_ID or MEETUP_SANDBOX_CHANNEL_ID.",
+      );
+    }
 
     const ch = await client.channels.fetch(boardChannelId);
     if (!ch || ch.type !== ChannelType.GuildText) {
-      throw new Error("Board channel is not a text channel.");
+      throw new Error("Board channel is not a guild text channel.");
     }
 
     const channel = ch as TextChannel;
@@ -61,6 +71,7 @@ export class MeetupBoardService {
     const lines: string[] = [];
     lines.push(`${BOARD_HEADER} ${BOARD_TAG}`);
     lines.push("");
+
     if (!upcoming.length) {
       lines.push("• (No upcoming meetups)");
       return lines.join("\n");
@@ -73,7 +84,7 @@ export class MeetupBoardService {
       if (m.eventUrl) links.push(`[Event](${m.eventUrl})`);
 
       lines.push(`• ${when} — ${m.title} (${m.location})`);
-      lines.push(`  ${links.join(" • ")}`.trimEnd());
+      lines.push(links.length ? `  ${links.join(" • ")}` : "  ");
       lines.push("");
     }
 

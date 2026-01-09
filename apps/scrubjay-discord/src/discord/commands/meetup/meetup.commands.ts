@@ -1,10 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
-import {
-  ChannelType,
-  EmbedBuilder,
-  type TextChannel,
-} from "discord.js";
+import { ChannelType, type TextChannel } from "discord.js";
 import { Context, Options, Subcommand, type SlashCommandContext } from "necord";
+
 import { MeetupCommand } from "./meetup.decorator";
 import { MeetupCreateDto, MeetupPreviewDto } from "./meetup.dto";
 import { assertSandboxAllowed } from "./meetup.sandbox";
@@ -22,7 +19,10 @@ export class MeetupCommands {
 
   public constructor(private readonly board: MeetupBoardService) {}
 
-  @Subcommand({ name: "preview", description: "Preview a meetup (no changes made)" })
+  @Subcommand({
+    name: "preview",
+    description: "Preview a meetup (no changes made)",
+  })
   public async onPreview(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: MeetupPreviewDto,
@@ -36,10 +36,11 @@ export class MeetupCommands {
 
       const starter = this.buildThreadStarter(options, startUnix, endUnix);
 
-      const embed = new EmbedBuilder()
-        .setTitle("Meetup Preview")
-        .setDescription(
+      return interaction.reply({
+        ephemeral: true,
+        content:
           [
+            "**Meetup Preview (no changes made)**",
             `**Title:** ${options.title}`,
             `**When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
             `**Location:** ${options.location}`,
@@ -56,9 +57,7 @@ export class MeetupCommands {
           ]
             .filter(Boolean)
             .join("\n"),
-        );
-
-      return interaction.reply({ ephemeral: true, embeds: [embed] });
+      });
     } catch (e: any) {
       return interaction.reply({
         ephemeral: true,
@@ -67,7 +66,10 @@ export class MeetupCommands {
     }
   }
 
-  @Subcommand({ name: "create", description: "Create a meetup (sandbox-only for now)" })
+  @Subcommand({
+    name: "create",
+    description: "Create a meetup (sandbox-only for now)",
+  })
   public async onCreate(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: MeetupCreateDto,
@@ -90,24 +92,24 @@ export class MeetupCommands {
       if (!channel || channel.type !== ChannelType.GuildText) {
         return interaction.editReply("This command must be used in a text channel.");
       }
-
       const textChannel = channel as TextChannel;
+
       const meetupId = makeId();
 
-      // 1) Post starter message in #bot-sandbox
+      // 1) Post starter message in sandbox channel
       const starterText = this.buildThreadStarter(options, startUnix, endUnix);
       const starterMsg = await textChannel.send({ content: starterText });
 
       // 2) Create thread
       const thread = await starterMsg.startThread({
         name: `Meetup • ${options.title}`.slice(0, 100),
-        autoArchiveDuration: 1440, // 24h (fine for sandbox)
+        autoArchiveDuration: 1440, // 24h
         reason: "ScrubJay meetup create (sandbox)",
       });
 
       await starterMsg.pin();
 
-      // 3) Create scheduled event (optional for sandbox; if it fails, we continue)
+      // 3) Try scheduled event (if perms missing, we continue)
       let eventUrl: string | undefined;
       try {
         if (interaction.guild) {
@@ -127,7 +129,7 @@ export class MeetupCommands {
         this.logger.warn(`Event create failed (sandbox ok): ${err}`);
       }
 
-      // 4) Update board (single pinned message)
+      // 4) Update pinned board message
       this.board.upsert({
         id: meetupId,
         title: options.title,
@@ -159,7 +161,9 @@ export class MeetupCommands {
     if (options.skillLevel) lines.push(`Skill level: ${options.skillLevel}`);
     if (options.notes) lines.push(`Notes: ${options.notes}`);
     lines.push("");
-    lines.push("Safety: This is an 18+ community meetup. No personal info required. No DMs from the bot.");
+    lines.push(
+      "Safety: 18+ only. No personal info required. No bot DMs. Keep coordination in the thread.",
+    );
     return lines.join("\n").slice(0, 900);
   }
 
@@ -171,7 +175,9 @@ export class MeetupCommands {
     const lines: string[] = [];
 
     lines.push(`🗓️ **${options.title}**`);
-    lines.push(`⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`);
+    lines.push(
+      `⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
+    );
     lines.push(`📍 **Where:** ${options.location}`);
     if (options.skillLevel) lines.push(`🎯 **Skill level:** ${options.skillLevel}`);
     if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
@@ -181,7 +187,7 @@ export class MeetupCommands {
     lines.push("• No bot DMs. Keep coordination in this thread.");
     lines.push("• Use good judgment; moderators may intervene for safety.");
     lines.push("");
-    lines.push("✅ React/RSVP tools may appear here later (sandbox MVP).");
+    lines.push("✅ RSVP tools may appear here later (sandbox MVP).");
 
     return lines.join("\n");
   }
