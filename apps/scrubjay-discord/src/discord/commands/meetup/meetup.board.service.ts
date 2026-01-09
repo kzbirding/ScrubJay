@@ -7,14 +7,19 @@ import {
 } from "discord.js";
 import { sandboxConfig } from "./meetup.sandbox";
 
-type BoardMeetup = {
+export type MeetupStatus = "SCHEDULED" | "CANCELED" | "CLOSED";
+
+export type StoredMeetup = {
   id: string;
+  guildId: string;
+  creatorId: string;
   title: string;
   location: string;
   startUnix: number;
-  threadUrl?: string;
+  threadId: string;
+  threadUrl: string;
   eventUrl?: string;
-  status: "SCHEDULED" | "CANCELED" | "CLOSED";
+  status: MeetupStatus;
 };
 
 const BOARD_HEADER = "📌 Upcoming Meetups";
@@ -24,21 +29,31 @@ const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
 export class MeetupBoardService {
   private readonly logger = new Logger(MeetupBoardService.name);
 
-  // Sandbox MVP: in-memory store (we’ll swap to DB later)
-  private meetups = new Map<string, BoardMeetup>();
+  // Sandbox MVP: in-memory store (swap to DB later)
+  private meetupsById = new Map<string, StoredMeetup>();
+  private meetupIdByThreadId = new Map<string, string>();
 
-  public upsert(meetup: BoardMeetup) {
-    this.meetups.set(meetup.id, meetup);
+  public upsert(meetup: StoredMeetup) {
+    this.meetupsById.set(meetup.id, meetup);
+    this.meetupIdByThreadId.set(meetup.threadId, meetup.id);
   }
 
-  public remove(id: string) {
-    this.meetups.delete(id);
+  public getByThreadId(threadId: string): StoredMeetup | undefined {
+    const id = this.meetupIdByThreadId.get(threadId);
+    if (!id) return undefined;
+    return this.meetupsById.get(id);
   }
 
-  private listUpcoming(): BoardMeetup[] {
+  public setStatus(id: string, status: MeetupStatus) {
+    const m = this.meetupsById.get(id);
+    if (!m) return;
+    m.status = status;
+    this.meetupsById.set(id, m);
+  }
+
+  private listUpcoming(): StoredMeetup[] {
     const now = Math.floor(Date.now() / 1000);
-    return [...this.meetups.values()]
-      // show upcoming, plus allow a small past buffer so it doesn’t vanish instantly
+    return [...this.meetupsById.values()]
       .filter((m) => m.status === "SCHEDULED" && m.startUnix >= now - 6 * 60 * 60)
       .sort((a, b) => a.startUnix - b.startUnix);
   }

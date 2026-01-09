@@ -1,5 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { ChannelType, type TextChannel } from "discord.js";
+import {
+  ChannelType,
+  type TextChannel,
+  type ThreadChannel,
+} from "discord.js";
 import { Context, Options, Subcommand, type SlashCommandContext } from "necord";
 
 import { MeetupCommand } from "./meetup.decorator";
@@ -129,12 +133,15 @@ export class MeetupCommands {
         this.logger.warn(`Event create failed (sandbox ok): ${err}`);
       }
 
-      // 4) Update pinned board message
+      // 4) Store meetup + update pinned board message
       this.board.upsert({
         id: meetupId,
+        guildId: interaction.guildId!,
+        creatorId: interaction.user.id,
         title: options.title,
         location: options.location,
         startUnix,
+        threadId: thread.id,
         threadUrl: thread.url,
         eventUrl,
         status: "SCHEDULED",
@@ -147,11 +154,124 @@ export class MeetupCommands {
           "✅ Meetup created (sandbox).",
           `Thread: ${thread.url}`,
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
+          "",
+          "Run `/meetup cancel` or `/meetup close` inside the thread.",
         ].join("\n"),
       );
     } catch (err: any) {
       this.logger.error(`Meetup create failed: ${err}`);
       return interaction.editReply(err?.message ?? "Meetup create failed.");
+    }
+  }
+
+  @Subcommand({
+    name: "cancel",
+    description: "Cancel a meetup (run inside the meetup thread)",
+  })
+  public async onCancel(@Context() [interaction]: SlashCommandContext) {
+    const gate = assertSandboxAllowed(interaction);
+    if (!gate.ok) {
+      return interaction.reply({ content: gate.reason, ephemeral: true });
+    }
+
+    const ch = interaction.channel;
+    if (!ch || ch.type !== ChannelType.PublicThread) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Run this command inside the meetup thread you want to cancel.",
+      });
+    }
+
+    const thread = ch as ThreadChannel;
+    const meetup = this.board.getByThreadId(thread.id);
+
+    if (!meetup) {
+      return interaction.reply({
+        ephemeral: true,
+        content:
+          "I don’t recognize this thread as a ScrubJay meetup (maybe it was created before the current deploy).",
+      });
+    }
+
+    // Sandbox permission check: creator only (we’ll add mod override later)
+    if (interaction.user.id !== meetup.creatorId) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Only the meetup creator can cancel this meetup (sandbox rule).",
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      await thread.send("❌ **This meetup has been canceled.**");
+
+      // Lock + archive so it stops getting bumped
+      await thread.setLocked(true, "Meetup canceled (sandbox)");
+      await thread.setArchived(true, "Meetup canceled (sandbox)");
+
+      this.board.setStatus(meetup.id, "CANCELED");
+      await this.board.renderToBoard(interaction.client);
+
+      return interaction.editReply("✅ Canceled. Thread archived/locked and removed from the board.");
+    } catch (err: any) {
+      this.logger.error(`Meetup cancel failed: ${err}`);
+      return interaction.editReply(err?.message ?? "Cancel failed.");
+    }
+  }
+
+  @Subcommand({
+    name: "close",
+    description: "Mark a meetup as completed (run inside the meetup thread)",
+  })
+  public async onClose(@Context() [interaction]: SlashCommandContext) {
+    const gate = assertSandboxAllowed(interaction);
+    if (!gate.ok) {
+      return interaction.reply({ content: gate.reason, ephemeral: true });
+    }
+
+    const ch = interaction.channel;
+    if (!ch || ch.type !== ChannelType.PublicThread) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Run this command inside the meetup thread you want to close.",
+      });
+    }
+
+    const thread = ch as ThreadChannel;
+    const meetup = this.board.getByThreadId(thread.id);
+
+    if (!meetup) {
+      return interaction.reply({
+        ephemeral: true,
+        content:
+          "I don’t recognize this thread as a ScrubJay meetup (maybe it was created before the current deploy).",
+      });
+    }
+
+    // Sandbox permission check: creator only (we’ll add mod override later)
+    if (interaction.user.id !== meetup.creatorId) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Only the meetup creator can close this meetup (sandbox rule).",
+      });
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    try {
+      await thread.send("✅ **This meetup has been marked as completed.**");
+
+      await thread.setLocked(true, "Meetup closed (sandbox)");
+      await thread.setArchived(true, "Meetup closed (sandbox)");
+
+      this.board.setStatus(meetup.id, "CLOSED");
+      await this.board.renderToBoard(interaction.client);
+
+      return interaction.editReply("✅ Closed. Thread archived/locked and removed from the board.");
+    } catch (err: any) {
+      this.logger.error(`Meetup close failed: ${err}`);
+      return interaction.editReply(err?.message ?? "Close failed.");
     }
   }
 
