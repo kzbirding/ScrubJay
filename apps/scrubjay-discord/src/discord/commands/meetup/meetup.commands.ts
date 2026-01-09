@@ -314,8 +314,13 @@ export class MeetupCommands {
       const timeErr = validateFutureTimes(startUnix, endUnix);
       if (timeErr) return interaction.editReply(timeErr);
 
-      // Update starter message
+      // Update starter message (null-safe)
       const starterMsg = await thread.fetchStarterMessage();
+      if (!starterMsg) {
+        return interaction.editReply(
+          "I couldn't find the thread starter message to edit (it may have been deleted).",
+        );
+      }
       const newStarterText = this.buildThreadStarter(options, startUnix, endUnix);
       await starterMsg.edit({ content: newStarterText });
 
@@ -344,7 +349,7 @@ export class MeetupCommands {
           await event.edit({
             name: options.title.slice(0, 100),
             scheduledStartTime: new Date(startUnix * 1000),
-            scheduledEndTime: endUnix ? new Date(endUnix * 1000) : null,
+            scheduledEndTime: endUnix ? new Date(endUnix * 1000) : undefined, // <-- FIX
             entityMetadata: { location: options.location.slice(0, 100) },
             description: this.buildEventDescription(options),
           });
@@ -484,13 +489,11 @@ export class MeetupCommands {
       const guild = interaction.guild;
       if (!guild) return null;
 
-      // Create a role name that's short and readable
-      // Example: "Meetup • Lake Hodges"
       const roleName = `Meetup • ${options.title}`.slice(0, 90);
 
       const role = await guild.roles.create({
         name: roleName,
-        mentionable: true, // organizer can @ it
+        mentionable: true,
         reason: "ScrubJay meetup RSVP role",
       });
 
@@ -525,7 +528,7 @@ export class MeetupCommands {
       "❌ **Not going** → removes the ping role",
       "",
       "Mods/organizer can ping attendees with the role mention above.",
-      `||RSVP_ROLE_ID:${roleId}||`, // hidden marker so buttons can find role later
+      `||RSVP_ROLE_ID:${roleId}||`,
     ].join("\n");
 
     const msg = await thread.send({ content, components: [row] });
