@@ -25,15 +25,9 @@ export type StoredMeetup = {
 const BOARD_HEADER = "📌 Ongoing Meetup Threads";
 const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
 
-// ✅ Your meetup-board channel (continuously edited)
-const MEETUP_BOARD_CHANNEL_ID = "1459069553727508610";
-
-// ✅ The parent channel where meetups are created (threads live under this)
-// Set this env var to the channel where you run /meetup create
-// Example: MEETUP_CHANNEL_ID="123..."
-function meetupChannelId() {
-  const v = process.env.MEETUP_CHANNEL_ID;
-  if (!v) throw new Error("MEETUP_CHANNEL_ID is missing.");
+function reqEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
 }
 
@@ -64,16 +58,15 @@ export class MeetupBoardService {
   }
 
   /**
-   * Rebuild memory by scanning threads under the configured meetup channel.
-   * Source of truth = the THREAD STARTER MESSAGE (in the parent channel),
-   * which contains the meetup panel + RSVP buttons.
+   * Rebuild memory by scanning threads under the configured MEETUP_CHANNEL_ID.
+   * Source of truth = thread starter message (contains meetup_rsvp buttons).
    */
   public async rebuildFromDiscord(client: Client) {
-    const meetupParentId = meetupChannelId();
+    const meetupChannelId = reqEnv("MEETUP_CHANNEL_ID");
 
-    const ch = await client.channels.fetch(meetupParentId);
+    const ch = await client.channels.fetch(meetupChannelId);
     if (!ch || ch.type !== ChannelType.GuildText) {
-      throw new Error("Meetup channel is not a guild text channel.");
+      throw new Error("MEETUP_CHANNEL_ID is not a guild text channel.");
     }
     const parent = ch as TextChannel;
 
@@ -81,37 +74,38 @@ export class MeetupBoardService {
     this.meetupsById.clear();
     this.meetupIdByThreadId.clear();
 
+    // Active threads
     const active = await parent.threads.fetchActive();
 
+    // Recently archived threads (helps recover if auto-archived)
     let archivedThreads: ThreadChannel[] = [];
     try {
       const archivedPublic = await parent.threads.fetchArchived({ type: "public" });
       archivedThreads = [...archivedPublic.threads.values()];
     } catch (e) {
-      // missing perms is ok; we still handle active
-      this.logger.warn(`Could not fetch archived threads: ${e}`);
+      this.logger.warn(`Could not fetch archived threads (ok): ${e}`);
     }
 
     const threads = [...active.threads.values(), ...archivedThreads];
 
-    // Deduplicate by id
+    // Deduplicate
     const seen = new Set<string>();
-    const uniqueThreads: ThreadChannel[] = [];
+    const unique: ThreadChannel[] = [];
     for (const t of threads) {
       if (seen.has(t.id)) continue;
       seen.add(t.id);
-      uniqueThreads.push(t);
+      unique.push(t);
     }
 
-    for (const thread of uniqueThreads) {
-      // Skip ended threads (cancel/close locks+archives)
+    for (const thread of unique) {
+      // Skip ended threads (your cancel/close locks+archives)
       if (thread.archived && thread.locked) continue;
 
       const starterMsg = await thread.fetchStarterMessage().catch(() => null);
       if (!starterMsg) continue;
 
-      // Only treat threads created by our system as meetups (must have RSVP buttons)
-      if (!this.messageHasRsvpButtons(starterMsg)) continue;
+      // Only treat as meetup if starter has RSVP buttons
+      if (!this.messageHasRsvpButtons(starterMsg as any)) continue;
 
       const parsed = this.parsePanelText(starterMsg.content ?? "");
       const title = parsed.title ?? thread.name ?? "Meetup";
@@ -123,11 +117,9 @@ export class MeetupBoardService {
 
       const creatorId = (thread as any).ownerId ?? "unknown";
 
-      // Use threadId as meetup id (stable across redeploys)
-      const meetupId = thread.id;
-
+      // Use threadId as stable meetup ID
       this.upsert({
-        id: meetupId,
+        id: thread.id,
         guildId,
         creatorId,
         title,
@@ -139,27 +131,35 @@ export class MeetupBoardService {
         status: "SCHEDULED",
       });
     }
-
-    this.logger.log(`Rebuilt meetups from Discord: ${this.meetupsById.size}`);
   }
 
   public async renderToBoard(client: Client) {
+    // Rebuild first (survives redeploys)
     await this.rebuildFromDiscord(client);
 
-    const ch = await client.channels.fetch(MEETUP_BOARD_CHANNEL_ID);
+    const boardChannelId = reqEnv("MEETUP_BOARD_CHANNEL_ID");
+    const boardMessageId = reqEnv("MEETUP_BOARD_MESSAGE_ID");
+
+    const ch = await client.channels.fetch(boardChannelId);
     if (!ch || ch.type !== ChannelType.GuildText) {
-      throw new Error("Board channel is not a guild text channel.");
+      throw new Error("MEETUP_BOARD_CHANNEL_ID is not a guild text channel.");
+    }
+    const channel = ch as TextChannel;
+
+    // ✅ Always edit THIS exact message ID (stable across redeploys)
+    const boardMsg = await channel.messages.fetch(boardMessageId).catch(() => null);
+    if (!boardMsg) {
+      throw new Error(
+        "Could not fetch MEETUP_BOARD_MESSAGE_ID in MEETUP_BOARD_CHANNEL_ID. " +
+          "Check that the message ID is correct and the bot has Read Message History.",
+      );
     }
 
-    const channel = ch as TextChannel;
-    const boardMsg = await this.findOrCreateBoardMessage(channel);
     const content = this.buildBoardText();
-
     await boardMsg.edit({ content });
   }
 
   private listOngoingThreads(): StoredMeetup[] {
-    // Optional: prevent board from growing forever
     const now = Math.floor(Date.now() / 1000);
     const maxAgeDays = 14;
     const minUnix = now - maxAgeDays * 24 * 60 * 60;
@@ -194,18 +194,6 @@ export class MeetupBoardService {
     }
 
     return lines.join("\n").trimEnd();
-  }
-
-  private async findOrCreateBoardMessage(channel: TextChannel): Promise<Message> {
-    const pinned = await channel.messages.fetchPinned();
-    const existing = pinned.find((m) => m.content.includes(BOARD_TAG));
-    if (existing) return existing;
-
-    const msg = await channel.send({
-      content: `${BOARD_HEADER} ${BOARD_TAG}\n\n• (No ongoing meetup threads)`,
-    });
-    await msg.pin().catch(() => null);
-    return msg;
   }
 
   private messageHasRsvpButtons(msg: Message): boolean {
