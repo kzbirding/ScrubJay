@@ -269,7 +269,14 @@ export class MeetupCommands {
       const meetupId = makeId();
 
       // Post the meetup panel as a normal message in the channel (buttons clickable here)
-      const panelText = this.buildMeetupPanelText(options, startUnix, endUnix, rsvpRoleId, organizerId);
+      const panelText = this.buildMeetupPanelText(
+        options,
+        startUnix,
+        endUnix,
+        rsvpRoleId,
+        organizerId,
+      );
+
       const starterMsg = await textChannel.send({
         content: panelText,
         components: [buildRsvpRow(rsvpRoleId)],
@@ -282,9 +289,14 @@ export class MeetupCommands {
         reason: "ScrubJay meetup create",
       });
 
-      await starterMsg.pin().catch(() => null);
+      // ❌ Do NOT pin the parent channel message
+      // await starterMsg.pin().catch(() => null);
 
-      // ✅ Create / ensure attendance message inside thread (starts empty)
+      // ✅ Pin the meetup panel INSIDE the thread (starter message)
+      const threadStarter = await thread.fetchStarterMessage().catch(() => null);
+      if (threadStarter) await threadStarter.pin().catch(() => null);
+
+      // ✅ Create / ensure attendance message inside thread (starts empty) — this pins itself
       await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
 
       // Try scheduled event (best-effort)
@@ -329,8 +341,8 @@ export class MeetupCommands {
           `Thread: ${thread.url}`,
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
           "",
-          "RSVP buttons are on the pinned meetup message in the channel.",
-          "Attendance list is pinned inside the thread.",
+          "RSVP buttons are on the meetup message in the channel.",
+          "The meetup panel + attendance list are pinned inside the thread.",
           "Run `/meetup edit`, `/meetup cancel`, or `/meetup close` inside the thread.",
         ].join("\n"),
       );
@@ -448,7 +460,9 @@ export class MeetupCommands {
       }
 
       // ✅ Refresh attendance (in case role membership exists already)
-      await this.upsertAttendanceMessage(thread, interaction.guildId!, existingRoleId).catch(() => null);
+      await this.upsertAttendanceMessage(thread, interaction.guildId!, existingRoleId).catch(
+        () => null,
+      );
 
       await thread.send("✏️ **Meetup details updated.**").catch(() => null);
       return interaction.editReply("✅ Updated.");
