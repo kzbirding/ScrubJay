@@ -9,7 +9,6 @@ import { Context, Options, Subcommand, type SlashCommandContext } from "necord";
 
 import { MeetupCommand } from "./meetup.decorator";
 import { MeetupCreateDto, MeetupPreviewDto } from "./meetup.dto";
-import { assertSandboxAllowed } from "./meetup.sandbox";
 import { parseMeetupTimes } from "./meetup.time";
 import { MeetupBoardService } from "./meetup.board.service";
 
@@ -21,7 +20,6 @@ function canManageThread(interaction: any, thread: ThreadChannel): boolean {
   const member = interaction.member;
   if (!member) return false;
 
-  // discord.js exposes PermissionsBitField on GuildMember
   const perms = thread.permissionsFor(member);
   return Boolean(perms?.has(PermissionsBitField.Flags.ManageThreads));
 }
@@ -91,17 +89,12 @@ export class MeetupCommands {
 
   @Subcommand({
     name: "create",
-    description: "Create a meetup (sandbox-only for now)",
+    description: "Create a meetup",
   })
   public async onCreate(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: MeetupCreateDto,
   ) {
-    const gate = assertSandboxAllowed(interaction);
-    if (!gate.ok) {
-      return interaction.reply({ content: gate.reason, ephemeral: true });
-    }
-
     await interaction.deferReply({ ephemeral: true });
 
     try {
@@ -117,17 +110,17 @@ export class MeetupCommands {
       }
       const textChannel = channel as TextChannel;
 
-      const meetupId = makeId(); // still used for in-memory board tracking
+      const meetupId = makeId();
 
-      // 1) Post starter message (NO hidden ID marker)
+      // 1) Post starter message
       const starterText = this.buildThreadStarter(options, startUnix, endUnix);
       const starterMsg = await textChannel.send({ content: starterText });
 
       // 2) Create thread
       const thread = await starterMsg.startThread({
         name: `Meetup • ${options.title}`.slice(0, 100),
-        autoArchiveDuration: 1440, // 24h
-        reason: "ScrubJay meetup create (sandbox)",
+        autoArchiveDuration: 1440,
+        reason: "ScrubJay meetup create",
       });
 
       await starterMsg.pin();
@@ -149,10 +142,10 @@ export class MeetupCommands {
           eventUrl = `https://discord.com/events/${interaction.guildId}/${event.id}`;
         }
       } catch (err) {
-        this.logger.warn(`Event create failed (sandbox ok): ${err}`);
+        this.logger.warn(`Event create failed (ok): ${err}`);
       }
 
-      // 4) Store meetup + update pinned board message (RAM only; wiped on restart)
+      // 4) Store meetup + update board (RAM only; wiped on restart)
       this.board.upsert({
         id: meetupId,
         guildId: interaction.guildId!,
@@ -188,11 +181,6 @@ export class MeetupCommands {
     description: "Cancel a meetup (run inside the meetup thread)",
   })
   public async onCancel(@Context() [interaction]: SlashCommandContext) {
-    const gate = assertSandboxAllowed(interaction);
-    if (!gate.ok) {
-      return interaction.reply({ content: gate.reason, ephemeral: true });
-    }
-
     const ch = interaction.channel;
 
     if (
@@ -207,7 +195,6 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    // ✅ Permission rule: thread owner OR Manage Threads
     if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
@@ -218,7 +205,6 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Ensure we can post even if archived/locked
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post cancel message");
       }
@@ -231,7 +217,6 @@ export class MeetupCommands {
       await thread.setLocked(true, "Meetup canceled");
       await thread.setArchived(true, "Meetup canceled");
 
-      // Best-effort board update (only works if still in-memory)
       const m = this.board.getByThreadId(thread.id);
       if (m) {
         this.board.setStatus(m.id, "CANCELED");
@@ -250,11 +235,6 @@ export class MeetupCommands {
     description: "Mark a meetup as completed (run inside the meetup thread)",
   })
   public async onClose(@Context() [interaction]: SlashCommandContext) {
-    const gate = assertSandboxAllowed(interaction);
-    if (!gate.ok) {
-      return interaction.reply({ content: gate.reason, ephemeral: true });
-    }
-
     const ch = interaction.channel;
 
     if (
@@ -269,7 +249,6 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    // ✅ Permission rule: thread owner OR Manage Threads
     if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
