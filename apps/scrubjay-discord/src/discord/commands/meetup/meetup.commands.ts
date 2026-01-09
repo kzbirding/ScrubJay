@@ -175,7 +175,12 @@ export class MeetupCommands {
     }
 
     const ch = interaction.channel;
-    if (!ch || ch.type !== ChannelType.PublicThread) {
+
+    // Allow both public + private threads
+    if (
+      !ch ||
+      (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)
+    ) {
       return interaction.reply({
         ephemeral: true,
         content: "Run this command inside the meetup thread you want to cancel.",
@@ -204,6 +209,14 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
+      // Ensure we can post even if the thread is archived/locked
+      if (thread.archived) {
+        await thread.setArchived(false, "Temporarily unarchive to post cancel message");
+      }
+      if (thread.locked) {
+        await thread.setLocked(false, "Temporarily unlock to post cancel message");
+      }
+
       await thread.send("❌ **This meetup has been canceled.**");
 
       // Lock + archive so it stops getting bumped
@@ -231,7 +244,11 @@ export class MeetupCommands {
     }
 
     const ch = interaction.channel;
-    if (!ch || ch.type !== ChannelType.PublicThread) {
+
+    if (
+      !ch ||
+      (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)
+    ) {
       return interaction.reply({
         ephemeral: true,
         content: "Run this command inside the meetup thread you want to close.",
@@ -260,6 +277,13 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
+      if (thread.archived) {
+        await thread.setArchived(false, "Temporarily unarchive to post close message");
+      }
+      if (thread.locked) {
+        await thread.setLocked(false, "Temporarily unlock to post close message");
+      }
+
       await thread.send("✅ **This meetup has been marked as completed.**");
 
       await thread.setLocked(true, "Meetup closed (sandbox)");
