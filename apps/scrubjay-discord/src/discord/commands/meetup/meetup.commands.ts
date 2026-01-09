@@ -539,7 +539,20 @@ export class MeetupCommands {
       const guild = interaction.guild;
       if (!guild) return null;
 
-      const roleName = `Meetup • ${options.title}`.slice(0, 90);
+      // ✅ Make role name unique/readable by including date + start time
+      const roleDate = (() => {
+        const [y, m, d] = (options.date || "").split("-");
+        if (!y || !m || !d) return options.date || "";
+        const mm = String(Number(m));
+        const dd = String(Number(d));
+        return `${mm}/${dd}`;
+      })();
+
+      const roleTime = (options.startTime || "").trim(); // e.g. "07:30"
+      const roleName = `Meetup • ${options.title} ${roleDate}${roleTime ? ` ${roleTime}` : ""}`.slice(
+        0,
+        100,
+      );
 
       const role = await guild.roles.create({
         name: roleName,
