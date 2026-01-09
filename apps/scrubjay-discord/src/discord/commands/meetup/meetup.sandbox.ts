@@ -1,4 +1,4 @@
-import type { ChatInputCommandInteraction } from "discord.js";
+import { ChannelType, type ChatInputCommandInteraction } from "discord.js";
 
 function envBool(v?: string) {
   return (v ?? "").toLowerCase() === "true";
@@ -23,6 +23,7 @@ export function assertSandboxAllowed(i: ChatInputCommandInteraction) {
 
   const { guildId, channelId } = sandboxConfig();
 
+  // Must be in the sandbox guild
   if (!i.guildId || i.guildId !== guildId) {
     return {
       ok: false as const,
@@ -30,12 +31,32 @@ export function assertSandboxAllowed(i: ChatInputCommandInteraction) {
     };
   }
 
-  if (!i.channelId || i.channelId !== channelId) {
+  const ch = i.channel;
+  if (!ch) {
     return {
       ok: false as const,
-      reason: `Sandbox mode is ON. Use this command only in <#${channelId}>.`,
+      reason: "Sandbox mode: channel not found.",
     };
   }
 
-  return { ok: true as const };
+  // Allowed directly in #bot-sandbox
+  if (i.channelId === channelId) {
+    return { ok: true as const };
+  }
+
+  // Allowed in threads under #bot-sandbox
+  if (
+    ch.type === ChannelType.PublicThread ||
+    ch.type === ChannelType.PrivateThread
+  ) {
+    const parentId = (ch as any).parentId as string | null | undefined;
+    if (parentId === channelId) {
+      return { ok: true as const };
+    }
+  }
+
+  return {
+    ok: false as const,
+    reason: `Sandbox mode is ON. Use this command in <#${channelId}> or its meetup threads.`,
+  };
 }
