@@ -44,6 +44,23 @@ function validateFutureTimes(startUnix: number, endUnix?: number): string | null
   return null;
 }
 
+// ✅ /meetup create channel gate
+function assertMeetupCreateChannel(interaction: any): string | null {
+  const allowedId = process.env.MEETUP_CHANNEL_ID;
+  if (!allowedId) return "MEETUP_CHANNEL_ID is not set on the bot.";
+
+  const ch = interaction.channel;
+  if (!ch || ch.type !== ChannelType.GuildText) {
+    return `Use this command in <#${allowedId}>.`;
+  }
+
+  if (ch.id !== allowedId) {
+    return `Use this command in <#${allowedId}>.`;
+  }
+
+  return null;
+}
+
 function buildRsvpRow(roleId: string) {
   // format: meetup_rsvp:<action>:<roleId>
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -202,6 +219,10 @@ export class MeetupCommands {
     @Options() options: MeetupCreateDto,
   ) {
     await interaction.deferReply({ ephemeral: true });
+
+    // ✅ Only allow /meetup create in MEETUP_CHANNEL_ID
+    const gateErr = assertMeetupCreateChannel(interaction);
+    if (gateErr) return interaction.editReply(gateErr);
 
     try {
       const { startUnix, endUnix } = parseMeetupTimes(
@@ -494,7 +515,7 @@ export class MeetupCommands {
     if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
-       content: "Only the thread creator or a moderator can close this meetup.",
+        content: "Only the thread creator or a moderator can close this meetup.",
       });
     }
 
