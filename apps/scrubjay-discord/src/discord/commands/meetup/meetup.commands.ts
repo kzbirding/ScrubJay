@@ -163,21 +163,37 @@ export class MeetupCommands {
 
       const { action, roleId } = parsed;
 
+      const memberId = member.id ?? bi.user.id;
+
       if (action === "go") {
         await member.roles.add(roleId).catch(() => null);
+
+        // ✅ force refresh so role.members is accurate immediately
+        await this.forceRefreshMemberAndRole(bi, roleId, memberId);
+
         await this.tryUpdateAttendanceFromButton(bi, roleId);
         return bi.reply({ ephemeral: true, content: "✅ You’re marked as **Going**." });
       }
 
       if (action === "no") {
         await member.roles.remove(roleId).catch(() => null);
+
+        // ✅ force refresh so role.members is accurate immediately
+        await this.forceRefreshMemberAndRole(bi, roleId, memberId);
+
         await this.tryUpdateAttendanceFromButton(bi, roleId);
         return bi.reply({ ephemeral: true, content: "❌ You’re marked as **Not going**." });
       }
 
+      // maybe = remove role, no pings
       await member.roles.remove(roleId).catch(() => null);
+
+      // ✅ force refresh so role.members is accurate immediately
+      await this.forceRefreshMemberAndRole(bi, roleId, memberId);
+
       await this.tryUpdateAttendanceFromButton(bi, roleId);
       return bi.reply({ ephemeral: true, content: "🤔 You’re marked as **Maybe** (no pings)." });
+
     } catch (e) {
       this.logger.warn(`RSVP interaction failed: ${e}`);
       try {
@@ -267,7 +283,7 @@ export class MeetupCommands {
 
       // 2) Create thread from the RSVP message
       const thread = await starterMsg.startThread({
-        name: `Meetup • ${options.title}`.slice(0, 100),
+        name: `[${options.county}] ${options.title}`.slice(0, 100),
         autoArchiveDuration: 1440,
         reason: "ScrubJay meetup create",
       });
@@ -427,7 +443,7 @@ export class MeetupCommands {
         ),
       );
 
-      await thread.setName(`Meetup • ${options.title}`.slice(0, 100));
+      await thread.setName(`[${options.county}] ${options.title}`.slice(0, 100));
 
       const m = this.board.getByThreadId(thread.id);
       if (m) {
@@ -889,4 +905,27 @@ export class MeetupCommands {
 
     return lines.join("\n");
   }
+
+    // Force-refresh caches so role.members reflects changes immediately
+  private async forceRefreshMemberAndRole(
+    bi: ButtonInteraction,
+    roleId: string,
+    memberId: string,
+  ) {
+    try {
+      const guild = bi.guild;
+      if (!guild) return;
+
+      // Refresh the member object in cache
+      await guild.members
+        .fetch({ user: memberId, force: true } as any)
+        .catch(() => null);
+
+      // Refresh the role object in cache
+      await guild.roles.fetch(roleId, { force: true } as any).catch(() => null);
+    } catch {
+      // best-effort only
+    }
+  }
+
 }

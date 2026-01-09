@@ -51,6 +51,13 @@ export class MeetupCreateDto {
   @StringOption({ name: "title", description: "Meetup title", required: true })
   title!: string;
 
+  @StringOption({
+    name: "county",
+    description: "County (e.g. San Diego, Orange County, LA County)",
+    required: true,
+  })
+  county!: string;
+
   @StringOption({ name: "date", description: "Date (YYYY-MM-DD)", required: true })
   date!: string;
 
