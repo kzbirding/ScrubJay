@@ -116,6 +116,21 @@ function getOrganizerIdFromPanelText(text: string): string | null {
   return m?.[1] ?? null;
 }
 
+// Helper: build unique role name from meetup inputs
+function buildRsvpRoleNameFromOptions(options: MeetupCreateDto | MeetupPreviewDto): string {
+  const roleDate = (() => {
+    const [y, m, d] = (options.date || "").split("-");
+    if (!y || !m || !d) return (options.date || "").trim();
+    const mm = String(Number(m));
+    const dd = String(Number(d));
+    return `${mm}/${dd}`;
+  })();
+
+  const roleTime = (options.startTime || "").trim(); // e.g. "07:30"
+  const base = `Meetup • ${options.title} ${roleDate}${roleTime ? ` ${roleTime}` : ""}`;
+  return base.slice(0, 100);
+}
+
 @Injectable()
 @MeetupCommand()
 export class MeetupCommands {
@@ -197,6 +212,7 @@ export class MeetupCommands {
         endUnix,
         null,
         interaction.user?.id ?? null,
+        null, // no RSVP link in preview
       );
 
       return interaction.reply({
@@ -269,18 +285,31 @@ export class MeetupCommands {
       const meetupId = makeId();
 
       // Post the meetup panel as a normal message in the channel (buttons clickable here)
-      const panelText = this.buildMeetupPanelText(
+      // (We don’t know the URL until after send — so send once, then edit to inject the link.)
+      const initialPanelText = this.buildMeetupPanelText(
         options,
         startUnix,
         endUnix,
         rsvpRoleId,
         organizerId,
+        null,
       );
 
       const starterMsg = await textChannel.send({
-        content: panelText,
+        content: initialPanelText,
         components: [buildRsvpRow(rsvpRoleId)],
       });
+
+      // Now we can include a direct link back to the RSVP message for thread viewers
+      const finalPanelText = this.buildMeetupPanelText(
+        options,
+        startUnix,
+        endUnix,
+        rsvpRoleId,
+        organizerId,
+        starterMsg.url,
+      );
+      await starterMsg.edit({ content: finalPanelText }).catch(() => null);
 
       // Create thread from that message
       const thread = await starterMsg.startThread({
@@ -290,7 +319,6 @@ export class MeetupCommands {
       });
 
       // ❌ Do NOT pin the parent channel message
-      // await starterMsg.pin().catch(() => null);
 
       // ✅ Pin the meetup panel INSIDE the thread (starter message)
       const threadStarter = await thread.fetchStarterMessage().catch(() => null);
@@ -409,9 +437,15 @@ export class MeetupCommands {
         );
       }
 
+      // ✅ (1) Rename the RSVP role to match the edited meetup parameters
+      await this.tryRenameRsvpRole(interaction, existingRoleId, options).catch(() => null);
+
       // Preserve organizer id from the existing panel (fallback: current user)
       const existingOrganizerId =
         getOrganizerIdFromPanelText(starterMsg.content ?? "") ?? interaction.user?.id ?? null;
+
+      // ✅ include RSVP link back to the parent message URL
+      const rsvpMessageUrl = (starterMsg as any)?.url ?? null;
 
       const newText = this.buildMeetupPanelText(
         options,
@@ -419,6 +453,7 @@ export class MeetupCommands {
         endUnix,
         existingRoleId,
         existingOrganizerId,
+        rsvpMessageUrl,
       );
 
       await starterMsg.edit({
@@ -637,20 +672,7 @@ export class MeetupCommands {
       const guild = interaction.guild;
       if (!guild) return null;
 
-      // ✅ Make role name unique/readable by including date + start time
-      const roleDate = (() => {
-        const [y, m, d] = (options.date || "").split("-");
-        if (!y || !m || !d) return options.date || "";
-        const mm = String(Number(m));
-        const dd = String(Number(d));
-        return `${mm}/${dd}`;
-      })();
-
-      const roleTime = (options.startTime || "").trim(); // e.g. "07:30"
-      const roleName = `Meetup • ${options.title} ${roleDate}${roleTime ? ` ${roleTime}` : ""}`.slice(
-        0,
-        100,
-      );
+      const roleName = buildRsvpRoleNameFromOptions(options);
 
       const role = await guild.roles.create({
         name: roleName,
@@ -662,6 +684,27 @@ export class MeetupCommands {
     } catch (e) {
       this.logger.warn(`RSVP role create failed: ${e}`);
       return null;
+    }
+  }
+
+  private async tryRenameRsvpRole(interaction: any, roleId: string, options: MeetupCreateDto) {
+    try {
+      const guild = interaction.guild;
+      if (!guild) return;
+
+      const role = await guild.roles.fetch(roleId).catch(() => null);
+      if (!role) return;
+
+      const newName = buildRsvpRoleNameFromOptions(options);
+
+      // Only edit if changed (reduces API calls)
+      if (role.name !== newName) {
+        await role.edit({ name: newName, mentionable: true }, "ScrubJay meetup edit: rename RSVP role").catch(
+          () => null,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(`RSVP role rename failed (ok): ${e}`);
     }
   }
 
@@ -790,6 +833,7 @@ export class MeetupCommands {
     endUnix: number | undefined,
     rsvpRoleId: string | null,
     organizerId: string | null,
+    rsvpMessageUrl: string | null, // ✅ link back to RSVP post for thread viewers
   ) {
     const lines: string[] = [];
 
@@ -819,6 +863,13 @@ export class MeetupCommands {
       lines.push("• **Maybe** = no pings");
       lines.push("• **Not going** = removes the ping role");
       lines.push("• Organizer/mods can ping attendees by mentioning the role above.");
+
+      // ✅ note + link back to the RSVP post
+      if (rsvpMessageUrl) {
+        lines.push(
+          `• ⚠️ **RSVP buttons do not work inside the thread.** Click here to RSVP: ${rsvpMessageUrl}`,
+        );
+      }
     } else {
       lines.push("• (Preview only) RSVP role will be created automatically on real meetups.");
     }
