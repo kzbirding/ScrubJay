@@ -8,6 +8,7 @@ import {
   type ButtonInteraction,
   type TextChannel,
   type ThreadChannel,
+  type Message,
 } from "discord.js";
 import { Context, On, Options, Subcommand, type SlashCommandContext } from "necord";
 
@@ -26,15 +27,6 @@ function canManageThread(interaction: any, thread: ThreadChannel): boolean {
 
   const perms = thread.permissionsFor(member);
   return Boolean(perms?.has(PermissionsBitField.Flags.ManageThreads));
-}
-
-function isThreadOwner(interaction: any, thread: ThreadChannel): boolean {
-  const ownerId = (thread as any).ownerId as string | null | undefined;
-  return Boolean(ownerId && interaction.user?.id === ownerId);
-}
-
-function canCancelOrClose(interaction: any, thread: ThreadChannel): boolean {
-  return isThreadOwner(interaction, thread) || canManageThread(interaction, thread);
 }
 
 function validateFutureTimes(startUnix: number, endUnix?: number): string | null {
@@ -112,6 +104,18 @@ function getRoleIdFromMessageComponents(msg: any): string | null {
   }
 }
 
+// =========================
+// Organizer + Attendance helpers
+// =========================
+const ATTENDANCE_TAG = "[SCRUBJAY_MEETUP_ATTENDANCE]";
+const ORGANIZER_TAG_PREFIX = "(OrganizerId:"; // stored in panel text for persistence across redeploys
+const ORGANIZER_TAG_RE = /\(OrganizerId:(\d+)\)/;
+
+function getOrganizerIdFromPanelText(text: string): string | null {
+  const m = (text ?? "").match(ORGANIZER_TAG_RE);
+  return m?.[1] ?? null;
+}
+
 @Injectable()
 @MeetupCommand()
 export class MeetupCommands {
@@ -143,18 +147,22 @@ export class MeetupCommands {
 
       const { action, roleId } = parsed;
 
+      // Apply role changes
       if (action === "go") {
         await member.roles.add(roleId).catch(() => null);
+        await this.tryUpdateAttendanceFromButton(bi, roleId);
         return bi.reply({ ephemeral: true, content: "✅ You’re marked as **Going**." });
       }
 
       if (action === "no") {
         await member.roles.remove(roleId).catch(() => null);
+        await this.tryUpdateAttendanceFromButton(bi, roleId);
         return bi.reply({ ephemeral: true, content: "❌ You’re marked as **Not going**." });
       }
 
       // maybe = no role (no pings)
       await member.roles.remove(roleId).catch(() => null);
+      await this.tryUpdateAttendanceFromButton(bi, roleId);
       return bi.reply({ ephemeral: true, content: "🤔 You’re marked as **Maybe** (no pings)." });
     } catch (e) {
       this.logger.warn(`RSVP interaction failed: ${e}`);
@@ -182,7 +190,14 @@ export class MeetupCommands {
         options.endTime,
       );
 
-      const starter = this.buildMeetupPanelText(options, startUnix, endUnix, null);
+      // Preview uses the person previewing as the organizer, purely for display.
+      const starter = this.buildMeetupPanelText(
+        options,
+        startUnix,
+        endUnix,
+        null,
+        interaction.user?.id ?? null,
+      );
 
       return interaction.reply({
         ephemeral: true,
@@ -240,6 +255,9 @@ export class MeetupCommands {
       }
       const textChannel = channel as TextChannel;
 
+      // Organizer is the user who ran /meetup create
+      const organizerId = interaction.user?.id ?? null;
+
       // Create RSVP role (required)
       const rsvpRoleId = await this.createRsvpRole(interaction, options);
       if (!rsvpRoleId) {
@@ -251,7 +269,7 @@ export class MeetupCommands {
       const meetupId = makeId();
 
       // Post the meetup panel as a normal message in the channel (buttons clickable here)
-      const panelText = this.buildMeetupPanelText(options, startUnix, endUnix, rsvpRoleId);
+      const panelText = this.buildMeetupPanelText(options, startUnix, endUnix, rsvpRoleId, organizerId);
       const starterMsg = await textChannel.send({
         content: panelText,
         components: [buildRsvpRow(rsvpRoleId)],
@@ -265,6 +283,9 @@ export class MeetupCommands {
       });
 
       await starterMsg.pin().catch(() => null);
+
+      // ✅ Create / ensure attendance message inside thread (starts empty)
+      await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
 
       // Try scheduled event (best-effort)
       let eventUrl: string | undefined;
@@ -309,6 +330,7 @@ export class MeetupCommands {
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
           "",
           "RSVP buttons are on the pinned meetup message in the channel.",
+          "Attendance list is pinned inside the thread.",
           "Run `/meetup edit`, `/meetup cancel`, or `/meetup close` inside the thread.",
         ].join("\n"),
       );
@@ -340,10 +362,12 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    if (!canCancelOrClose(interaction, thread)) {
+    // ✅ Organizer/mod check (NOT thread.ownerId — bot owns the thread)
+    const canEdit = await this.canManageMeetup(interaction, thread);
+    if (!canEdit) {
       return interaction.reply({
         ephemeral: true,
-        content: "Only the thread creator or a moderator can edit this meetup.",
+        content: "Only the meetup organizer or a moderator can edit this meetup.",
       });
     }
 
@@ -373,7 +397,18 @@ export class MeetupCommands {
         );
       }
 
-      const newText = this.buildMeetupPanelText(options, startUnix, endUnix, existingRoleId);
+      // Preserve organizer id from the existing panel (fallback: current user)
+      const existingOrganizerId =
+        getOrganizerIdFromPanelText(starterMsg.content ?? "") ?? interaction.user?.id ?? null;
+
+      const newText = this.buildMeetupPanelText(
+        options,
+        startUnix,
+        endUnix,
+        existingRoleId,
+        existingOrganizerId,
+      );
+
       await starterMsg.edit({
         content: newText,
         components: [buildRsvpRow(existingRoleId)],
@@ -412,6 +447,9 @@ export class MeetupCommands {
         }
       }
 
+      // ✅ Refresh attendance (in case role membership exists already)
+      await this.upsertAttendanceMessage(thread, interaction.guildId!, existingRoleId).catch(() => null);
+
       await thread.send("✏️ **Meetup details updated.**").catch(() => null);
       return interaction.editReply("✅ Updated.");
     } catch (err: any) {
@@ -439,10 +477,11 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    if (!canCancelOrClose(interaction, thread)) {
+    const canCancel = await this.canManageMeetup(interaction, thread);
+    if (!canCancel) {
       return interaction.reply({
         ephemeral: true,
-        content: "Only the thread creator or a moderator can cancel this meetup.",
+        content: "Only the meetup organizer or a moderator can cancel this meetup.",
       });
     }
 
@@ -512,10 +551,11 @@ export class MeetupCommands {
 
     const thread = ch as ThreadChannel;
 
-    if (!canCancelOrClose(interaction, thread)) {
+    const canClose = await this.canManageMeetup(interaction, thread);
+    if (!canClose) {
       return interaction.reply({
         ephemeral: true,
-        content: "Only the thread creator or a moderator can close this meetup.",
+        content: "Only the meetup organizer or a moderator can close this meetup.",
       });
     }
 
@@ -549,6 +589,29 @@ export class MeetupCommands {
     } catch (err: any) {
       this.logger.error(`Meetup close failed: ${err}`);
       return interaction.editReply(err?.message ?? "Close failed.");
+    }
+  }
+
+  // =========================
+  // Permission helpers
+  // =========================
+  private async canManageMeetup(interaction: any, thread: ThreadChannel): Promise<boolean> {
+    // Mods always allowed
+    if (canManageThread(interaction, thread)) return true;
+
+    // Organizer allowed if panel has matching OrganizerId
+    const organizerId = await this.getOrganizerIdFromStarterMessage(thread);
+    if (!organizerId) return false;
+    return interaction?.user?.id === organizerId;
+  }
+
+  private async getOrganizerIdFromStarterMessage(thread: ThreadChannel): Promise<string | null> {
+    try {
+      const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+      if (!starterMsg) return null;
+      return getOrganizerIdFromPanelText(starterMsg.content ?? "");
+    } catch {
+      return null;
     }
   }
 
@@ -609,6 +672,91 @@ export class MeetupCommands {
   }
 
   // =========================
+  // Attendance logic
+  // =========================
+  private async tryUpdateAttendanceFromButton(bi: ButtonInteraction, roleId: string) {
+    try {
+      // Buttons are on the starter message in the parent channel.
+      // Discord.js attaches the thread to the message as message.thread if one exists.
+      const msg = bi.message as unknown as Message & { thread?: ThreadChannel | null };
+      const thread = msg?.thread ?? null;
+      if (!thread) return;
+
+      // If thread is archived/locked, we won't be able to edit/send — just skip quietly.
+      if (thread.archived && thread.locked) return;
+
+      await this.upsertAttendanceMessage(thread, bi.guildId!, roleId);
+    } catch (e) {
+      this.logger.warn(`Attendance update failed (ok): ${e}`);
+    }
+  }
+
+  private async findAttendanceMessage(thread: ThreadChannel): Promise<Message | null> {
+    try {
+      const pinned = await thread.messages.fetchPinned();
+      const found = pinned.find((m) => (m.content ?? "").includes(ATTENDANCE_TAG));
+      if (found) return found;
+
+      // If not pinned, try recent history (limit: 50)
+      const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
+      const foundRecent = recent?.find((m) => (m.content ?? "").includes(ATTENDANCE_TAG));
+      return foundRecent ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private buildAttendanceText(mentions: string[]) {
+    const lines: string[] = [];
+    lines.push(`👥 **Going (${mentions.length})** ${ATTENDANCE_TAG}`);
+    lines.push("");
+
+    if (!mentions.length) {
+      lines.push("• (No one yet)");
+      return lines.join("\n");
+    }
+
+    // Keep it readable; Discord message limit is 2000 chars.
+    for (const m of mentions) {
+      const next = `• ${m}`;
+      if (lines.join("\n").length + 1 + next.length > 1900) {
+        lines.push("");
+        lines.push("…and more");
+        break;
+      }
+      lines.push(next);
+    }
+
+    return lines.join("\n");
+  }
+
+  private async upsertAttendanceMessage(thread: ThreadChannel, _guildId: string, roleId: string) {
+    const guild = thread.guild;
+    if (!guild) return;
+
+    const role = await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) return;
+
+    // Build list of mentions from the role members
+    const mentions = [...role.members.values()]
+      .sort((a, b) => (a.displayName ?? "").localeCompare(b.displayName ?? ""))
+      .map((m) => `<@${m.id}>`);
+
+    const content = this.buildAttendanceText(mentions);
+
+    const existing = await this.findAttendanceMessage(thread);
+
+    if (existing) {
+      await existing.edit({ content }).catch(() => null);
+      await existing.pin().catch(() => null);
+      return;
+    }
+
+    const created = await thread.send({ content }).catch(() => null);
+    if (created) await created.pin().catch(() => null);
+  }
+
+  // =========================
   // Text builders
   // =========================
   private buildEventDescription(options: MeetupPreviewDto) {
@@ -627,6 +775,7 @@ export class MeetupCommands {
     startUnix: number,
     endUnix: number | undefined,
     rsvpRoleId: string | null,
+    organizerId: string | null,
   ) {
     const lines: string[] = [];
 
@@ -636,6 +785,12 @@ export class MeetupCommands {
     );
     lines.push(`📍 **Where:** ${options.location}`);
     if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
+
+    // ✅ Organizer (visible + persistent tag for permission checks)
+    if (organizerId) {
+      lines.push(`🧑‍💼 **Organizer:** <@${organizerId}>`);
+      lines.push(`${ORGANIZER_TAG_PREFIX}${organizerId})`);
+    }
 
     lines.push("");
     lines.push("🛡️ **Safety / Rules**");
