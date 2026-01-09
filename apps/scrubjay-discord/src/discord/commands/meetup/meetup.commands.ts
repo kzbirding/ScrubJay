@@ -281,23 +281,46 @@ export class MeetupCommands {
       );
       await starterMsg.edit({ content: finalPanelText }).catch(() => null);
 
-      // 2) Create thread from the RSVP message
-      const thread = await starterMsg.startThread({
-        name: `[${options.county}] ${options.title}`.slice(0, 100),
-        autoArchiveDuration: 1440,
-        reason: "ScrubJay meetup create",
-      });
+    // 2) Create thread from the RSVP message
+    const thread = await starterMsg.startThread({
+      name: `[${options.county}] ${options.title}`.slice(0, 100),
+      autoArchiveDuration: 1440,
+      reason: "ScrubJay meetup create",
+    });
 
-      // ✅ DO NOT PIN the parent message (ever)
+    // ✅ DO NOT PIN the parent message (ever)
 
-      // 3) Post a thread-local panel message (no buttons) and pin it
-      await this.upsertThreadPanelMessage(
-        thread,
-        this.buildThreadPanelText(options, startUnix, endUnix, rsvpRoleId, organizerId, starterMsg.url),
-      );
+    // 2.5) Send RSVP panel INSIDE the thread (buttons work here)
+    const rsvpInThread = await thread.send({
+      content: this.buildMeetupPanelText(
+        options,
+        startUnix,
+        endUnix,
+        rsvpRoleId,
+        organizerId,
+        starterMsg.url,
+      ),
+      components: [buildRsvpRow(rsvpRoleId)],
+    });
+    await rsvpInThread.pin().catch(() => null);
 
-      // 4) Attendance message (pins itself) — organizer will now appear because they have the role
-      await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
+    // 3) Post a thread-local panel message (no buttons) and pin it
+    await this.upsertThreadPanelMessage(
+      thread,
+      this.buildThreadPanelText(
+        options,
+        startUnix,
+        endUnix,
+        rsvpRoleId,
+        organizerId,
+        starterMsg.url,
+      ),
+    );
+
+    // 4) Attendance message (pins itself)
+    await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
+
+
 
       // Try scheduled event (best-effort)
       let eventUrl: string | undefined;
@@ -441,6 +464,20 @@ export class MeetupCommands {
           existingOrganizerId,
           rsvpMessageUrl,
         ),
+      );
+
+            // ✅ Update the pinned RSVP message inside the thread (buttons message)
+      await this.upsertThreadRsvpMessage(
+        thread,
+        this.buildMeetupPanelText(
+          options,
+          startUnix,
+          endUnix,
+          existingRoleId,
+          existingOrganizerId,
+          rsvpMessageUrl,
+        ),
+        existingRoleId,
       );
 
       await thread.setName(`[${options.county}] ${options.title}`.slice(0, 100));
@@ -711,10 +748,16 @@ export class MeetupCommands {
   // =========================
   private async tryUpdateAttendanceFromButton(bi: ButtonInteraction, roleId: string) {
     try {
-      const msg = bi.message as unknown as Message & { thread?: ThreadChannel | null };
-      const thread = msg?.thread ?? null;
-      if (!thread) return;
+      // If click happened inside a thread, bi.channel IS the thread
+      const ch = bi.channel;
 
+      const thread: ThreadChannel | null =
+        ch &&
+        (ch.type === ChannelType.PublicThread || ch.type === ChannelType.PrivateThread)
+          ? (ch as ThreadChannel)
+          : (((bi.message as any)?.thread as ThreadChannel | null) ?? null);
+
+      if (!thread) return;
       if (thread.archived && thread.locked) return;
 
       await this.upsertAttendanceMessage(thread, bi.guildId!, roleId);
@@ -722,6 +765,8 @@ export class MeetupCommands {
       this.logger.warn(`Attendance update failed (ok): ${e}`);
     }
   }
+
+
 
   private async findAttendanceMessage(thread: ThreadChannel): Promise<Message | null> {
     try {
@@ -782,6 +827,67 @@ export class MeetupCommands {
     }
 
     const created = await thread.send({ content }).catch(() => null);
+    if (created) await created.pin().catch(() => null);
+  }
+
+    // =========================
+  // Thread RSVP message (buttons inside the thread)
+  // =========================
+  private async findThreadRsvpMessage(
+    thread: ThreadChannel,
+    roleId: string,
+  ): Promise<Message | null> {
+    try {
+      const isRsvpMessage = (m: Message) => {
+        const comps: any[] = (m as any)?.components ?? [];
+        for (const row of comps) {
+          const rowComps: any[] = row?.components ?? [];
+          for (const c of rowComps) {
+            const parsed = parseRsvpCustomId(c?.customId ?? "");
+            if (parsed?.roleId === roleId) return true;
+          }
+        }
+        return false;
+      };
+
+      const pinned = await thread.messages.fetchPinned().catch(() => null);
+      const foundPinned = pinned?.find((m) => isRsvpMessage(m));
+      if (foundPinned) return foundPinned;
+
+      const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
+      const foundRecent = recent?.find((m) => isRsvpMessage(m));
+      return foundRecent ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async upsertThreadRsvpMessage(
+    thread: ThreadChannel,
+    content: string,
+    roleId: string,
+  ) {
+    const existing = await this.findThreadRsvpMessage(thread, roleId);
+
+    if (existing) {
+      await existing
+        .edit({
+          content,
+          components: [buildRsvpRow(roleId)],
+        })
+        .catch(() => null);
+
+      await existing.pin().catch(() => null);
+      return;
+    }
+
+    const created = await thread
+      .send({
+        content,
+        components: [buildRsvpRow(roleId)],
+      })
+      .catch(() => null);
+
     if (created) await created.pin().catch(() => null);
   }
 
