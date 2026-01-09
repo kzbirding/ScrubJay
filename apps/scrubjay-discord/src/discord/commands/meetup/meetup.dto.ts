@@ -1,7 +1,20 @@
 import { StringOption, BooleanOption } from "necord";
 
+/**
+ * IMPORTANT:
+ * Discord requires ALL required options to appear
+ * BEFORE any optional options.
+ * This file is ordered to satisfy that constraint.
+ */
+
 export class MeetupPreviewDto {
-  @StringOption({ name: "title", description: "Meetup title", required: true })
+  // ---------- REQUIRED OPTIONS (FIRST) ----------
+
+  @StringOption({
+    name: "title",
+    description: "Meetup title",
+    required: true,
+  })
   title!: string;
 
   @StringOption({
@@ -19,18 +32,20 @@ export class MeetupPreviewDto {
   startTime!: string;
 
   @StringOption({
-    name: "end_time",
-    description: "End time (HH:MM, 24h)",
-    required: false,
-  })
-  endTime?: string;
-
-  @StringOption({
     name: "location",
     description: "Location / hotspot link",
     required: true,
   })
   location!: string;
+
+  // ---------- OPTIONAL OPTIONS (AFTER) ----------
+
+  @StringOption({
+    name: "end_time",
+    description: "End time (HH:MM, 24h)",
+    required: false,
+  })
+  endTime?: string;
 
   @StringOption({
     name: "skill_level",
@@ -48,6 +63,8 @@ export class MeetupPreviewDto {
 }
 
 export class MeetupCreateDto extends MeetupPreviewDto {
+  // ---------- OPTIONAL ONLY (inherits required fields) ----------
+
   @BooleanOption({
     name: "create_rsvp_panel",
     description: "Create RSVP panel (later)",
