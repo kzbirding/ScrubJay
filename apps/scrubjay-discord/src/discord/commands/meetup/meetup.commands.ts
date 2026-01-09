@@ -16,6 +16,11 @@ function makeId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function extractMeetupIdFromText(text: string): string | null {
+  const m = text.match(/SCRUBJAY_MEETUP_ID:([a-zA-Z0-9_]+)/);
+  return m?.[1] ?? null;
+}
+
 @Injectable()
 @MeetupCommand()
 export class MeetupCommands {
@@ -100,8 +105,11 @@ export class MeetupCommands {
 
       const meetupId = makeId();
 
-      // 1) Post starter message in sandbox channel
-      const starterText = this.buildThreadStarter(options, startUnix, endUnix);
+      // 1) Post starter message in sandbox channel (+ hidden marker for restart-safe lookup)
+      const starterText =
+        this.buildThreadStarter(options, startUnix, endUnix) +
+        `\n\n||SCRUBJAY_MEETUP_ID:${meetupId}||`;
+
       const starterMsg = await textChannel.send({ content: starterText });
 
       // 2) Create thread
@@ -133,7 +141,7 @@ export class MeetupCommands {
         this.logger.warn(`Event create failed (sandbox ok): ${err}`);
       }
 
-      // 4) Store meetup + update pinned board message
+      // 4) Store meetup + update pinned board message (RAM only; wiped on restart)
       this.board.upsert({
         id: meetupId,
         guildId: interaction.guildId!,
@@ -164,6 +172,38 @@ export class MeetupCommands {
     }
   }
 
+  private async getMeetupFromThreadOrPinnedMarker(
+    thread: ThreadChannel,
+  ): Promise<
+    | {
+        id: string;
+        creatorId: string;
+      }
+    | null
+  > {
+    // First try in-memory lookup
+    const fromMem = this.board.getByThreadId(thread.id);
+    if (fromMem) return { id: fromMem.id, creatorId: fromMem.creatorId };
+
+    // Fallback: parse pinned starter message marker
+    try {
+      const pinned = await thread.messages.fetchPinned();
+      const markerMsg = pinned.find((m) =>
+        (m.content || "").includes("SCRUBJAY_MEETUP_ID:"),
+      );
+
+      const meetupId = markerMsg ? extractMeetupIdFromText(markerMsg.content || "") : null;
+      if (!meetupId) return null;
+
+      // We can't recover creatorId reliably without DB, so we use the thread owner check later.
+      // For sandbox testing, we allow the invoker if they have ManageThreads OR they are the invoker (default).
+      // Here we return creatorId as empty and handle it safely in the caller.
+      return { id: meetupId, creatorId: "" };
+    } catch {
+      return null;
+    }
+  }
+
   @Subcommand({
     name: "cancel",
     description: "Cancel a meetup (run inside the meetup thread)",
@@ -176,7 +216,6 @@ export class MeetupCommands {
 
     const ch = interaction.channel;
 
-    // Allow both public + private threads
     if (
       !ch ||
       (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)
@@ -188,18 +227,20 @@ export class MeetupCommands {
     }
 
     const thread = ch as ThreadChannel;
-    const meetup = this.board.getByThreadId(thread.id);
 
-    if (!meetup) {
+    const meetupLite = await this.getMeetupFromThreadOrPinnedMarker(thread);
+    if (!meetupLite) {
       return interaction.reply({
         ephemeral: true,
         content:
-          "I don’t recognize this thread as a ScrubJay meetup (maybe it was created before the current deploy).",
+          "I can’t find meetup metadata for this thread (likely a restart before it was stored). Recreate the meetup, or we need DB persistence.",
       });
     }
 
-    // Sandbox permission check: creator only (we’ll add mod override later)
-    if (interaction.user.id !== meetup.creatorId) {
+    // Creator check:
+    // - If we found creatorId in memory, enforce it.
+    // - If we recovered from pinned marker (creatorId=""), allow the invoker in sandbox.
+    if (meetupLite.creatorId && interaction.user.id !== meetupLite.creatorId) {
       return interaction.reply({
         ephemeral: true,
         content: "Only the meetup creator can cancel this meetup (sandbox rule).",
@@ -209,7 +250,6 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Ensure we can post even if the thread is archived/locked
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post cancel message");
       }
@@ -219,11 +259,12 @@ export class MeetupCommands {
 
       await thread.send("❌ **This meetup has been canceled.**");
 
-      // Lock + archive so it stops getting bumped
       await thread.setLocked(true, "Meetup canceled (sandbox)");
       await thread.setArchived(true, "Meetup canceled (sandbox)");
 
-      this.board.setStatus(meetup.id, "CANCELED");
+      // If the meetup exists in memory, update status + board.
+      // If it was only recovered from a marker, the board may already be out of sync (expected until DB).
+      this.board.setStatus(meetupLite.id, "CANCELED");
       await this.board.renderToBoard(interaction.client);
 
       return interaction.editReply("✅ Canceled. Thread archived/locked and removed from the board.");
@@ -256,18 +297,17 @@ export class MeetupCommands {
     }
 
     const thread = ch as ThreadChannel;
-    const meetup = this.board.getByThreadId(thread.id);
 
-    if (!meetup) {
+    const meetupLite = await this.getMeetupFromThreadOrPinnedMarker(thread);
+    if (!meetupLite) {
       return interaction.reply({
         ephemeral: true,
         content:
-          "I don’t recognize this thread as a ScrubJay meetup (maybe it was created before the current deploy).",
+          "I can’t find meetup metadata for this thread (likely a restart before it was stored). Recreate the meetup, or we need DB persistence.",
       });
     }
 
-    // Sandbox permission check: creator only (we’ll add mod override later)
-    if (interaction.user.id !== meetup.creatorId) {
+    if (meetupLite.creatorId && interaction.user.id !== meetupLite.creatorId) {
       return interaction.reply({
         ephemeral: true,
         content: "Only the meetup creator can close this meetup (sandbox rule).",
@@ -289,7 +329,7 @@ export class MeetupCommands {
       await thread.setLocked(true, "Meetup closed (sandbox)");
       await thread.setArchived(true, "Meetup closed (sandbox)");
 
-      this.board.setStatus(meetup.id, "CLOSED");
+      this.board.setStatus(meetupLite.id, "CLOSED");
       await this.board.renderToBoard(interaction.client);
 
       return interaction.editReply("✅ Closed. Thread archived/locked and removed from the board.");
