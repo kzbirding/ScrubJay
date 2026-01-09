@@ -25,18 +25,23 @@ export type StoredMeetup = {
 const BOARD_HEADER = "📌 Ongoing Meetup Threads";
 const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
 
-function cfg() {
-  return {
-    meetupChannelId: process.env.MEETUP_CHANNEL_ID,
-    boardChannelId: process.env.MEETUP_BOARD_CHANNEL_ID,
-  };
+// ✅ Your meetup-board channel (continuously edited)
+const MEETUP_BOARD_CHANNEL_ID = "1459069553727508610";
+
+// ✅ The parent channel where meetups are created (threads live under this)
+// Set this env var to the channel where you run /meetup create
+// Example: MEETUP_CHANNEL_ID="123..."
+function meetupChannelId() {
+  const v = process.env.MEETUP_CHANNEL_ID;
+  if (!v) throw new Error("MEETUP_CHANNEL_ID is missing.");
+  return v;
 }
 
 @Injectable()
 export class MeetupBoardService {
   private readonly logger = new Logger(MeetupBoardService.name);
 
-  // In-memory store (rebuilt from Discord on boot)
+  // In-memory store (rebuilt from Discord)
   private meetupsById = new Map<string, StoredMeetup>();
   private meetupIdByThreadId = new Map<string, string>();
 
@@ -59,21 +64,16 @@ export class MeetupBoardService {
   }
 
   /**
-   * Rebuild memory by scanning threads under MEETUP_CHANNEL_ID.
-   * Source of truth = pinned meetup panel message (the one with RSVP buttons).
-   *
-   * Call this ONCE on boot (via @On("ready")).
+   * Rebuild memory by scanning threads under the configured meetup channel.
+   * Source of truth = the THREAD STARTER MESSAGE (in the parent channel),
+   * which contains the meetup panel + RSVP buttons.
    */
   public async rebuildFromDiscord(client: Client) {
-    const { meetupChannelId } = cfg();
+    const meetupParentId = meetupChannelId();
 
-    if (!meetupChannelId) {
-      throw new Error("MEETUP_CHANNEL_ID is missing.");
-    }
-
-    const ch = await client.channels.fetch(meetupChannelId);
+    const ch = await client.channels.fetch(meetupParentId);
     if (!ch || ch.type !== ChannelType.GuildText) {
-      throw new Error("MEETUP_CHANNEL_ID is not a guild text channel.");
+      throw new Error("Meetup channel is not a guild text channel.");
     }
     const parent = ch as TextChannel;
 
@@ -81,15 +81,14 @@ export class MeetupBoardService {
     this.meetupsById.clear();
     this.meetupIdByThreadId.clear();
 
-    // Active threads under the parent channel
     const active = await parent.threads.fetchActive();
 
-    // (Optional) include archived public threads so you can recover if Discord auto-archives
     let archivedThreads: ThreadChannel[] = [];
     try {
       const archivedPublic = await parent.threads.fetchArchived({ type: "public" });
       archivedThreads = [...archivedPublic.threads.values()];
     } catch (e) {
+      // missing perms is ok; we still handle active
       this.logger.warn(`Could not fetch archived threads: ${e}`);
     }
 
@@ -105,14 +104,16 @@ export class MeetupBoardService {
     }
 
     for (const thread of uniqueThreads) {
-      // Skip ended threads (your cancel/close locks+archives)
+      // Skip ended threads (cancel/close locks+archives)
       if (thread.archived && thread.locked) continue;
 
-      const panel = await this.findPinnedMeetupPanel(thread);
-      if (!panel) continue;
+      const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+      if (!starterMsg) continue;
 
-      const parsed = this.parsePanelText(panel.content ?? "");
+      // Only treat threads created by our system as meetups (must have RSVP buttons)
+      if (!this.messageHasRsvpButtons(starterMsg)) continue;
 
+      const parsed = this.parsePanelText(starterMsg.content ?? "");
       const title = parsed.title ?? thread.name ?? "Meetup";
       const location = parsed.location ?? "—";
       const startUnix = parsed.startUnix ?? 0;
@@ -122,7 +123,7 @@ export class MeetupBoardService {
 
       const creatorId = (thread as any).ownerId ?? "unknown";
 
-      // Use thread id as meetup id (stable across redeploys)
+      // Use threadId as meetup id (stable across redeploys)
       const meetupId = thread.id;
 
       this.upsert({
@@ -142,19 +143,10 @@ export class MeetupBoardService {
     this.logger.log(`Rebuilt meetups from Discord: ${this.meetupsById.size}`);
   }
 
-  /**
-   * Render board using CURRENT in-memory meetups.
-   * (We do NOT rebuild here; that happens once on boot.)
-   */
   public async renderToBoard(client: Client) {
-    const { boardChannelId, meetupChannelId } = cfg();
+    await this.rebuildFromDiscord(client);
 
-    const channelId = boardChannelId ?? meetupChannelId;
-    if (!channelId) {
-      throw new Error("MEETUP_BOARD_CHANNEL_ID (or MEETUP_CHANNEL_ID fallback) is missing.");
-    }
-
-    const ch = await client.channels.fetch(channelId);
+    const ch = await client.channels.fetch(MEETUP_BOARD_CHANNEL_ID);
     if (!ch || ch.type !== ChannelType.GuildText) {
       throw new Error("Board channel is not a guild text channel.");
     }
@@ -167,7 +159,7 @@ export class MeetupBoardService {
   }
 
   private listOngoingThreads(): StoredMeetup[] {
-    // Optional filter so it doesn’t grow forever
+    // Optional: prevent board from growing forever
     const now = Math.floor(Date.now() / 1000);
     const maxAgeDays = 14;
     const minUnix = now - maxAgeDays * 24 * 60 * 60;
@@ -197,7 +189,7 @@ export class MeetupBoardService {
     for (const m of ongoing) {
       const when = m.startUnix ? `<t:${m.startUnix}:f>` : "(time unknown)";
       lines.push(`• ${when} — ${m.title} (${m.location})`);
-      lines.push(`  [Open thread](${m.threadUrl})`);
+      lines.push(`  ${m.threadUrl}`);
       lines.push("");
     }
 
@@ -212,24 +204,8 @@ export class MeetupBoardService {
     const msg = await channel.send({
       content: `${BOARD_HEADER} ${BOARD_TAG}\n\n• (No ongoing meetup threads)`,
     });
-    await msg.pin();
+    await msg.pin().catch(() => null);
     return msg;
-  }
-
-  // =========================
-  // Panel detection + parsing
-  // =========================
-
-  private async findPinnedMeetupPanel(thread: ThreadChannel): Promise<Message | null> {
-    try {
-      const pinned = await thread.messages.fetchPinned();
-
-      // pinned message that has RSVP buttons (customId starts with meetup_rsvp:)
-      const panel = pinned.find((m) => this.messageHasRsvpButtons(m));
-      return panel ?? null;
-    } catch {
-      return null;
-    }
   }
 
   private messageHasRsvpButtons(msg: Message): boolean {
@@ -251,15 +227,12 @@ export class MeetupBoardService {
   private parsePanelText(text: string): { title?: string; location?: string; startUnix?: number } {
     const out: { title?: string; location?: string; startUnix?: number } = {};
 
-    // Title line: 🗓️ **Title**
     const titleMatch = text.match(/🗓️\s*\*\*(.+?)\*\*/);
     if (titleMatch?.[1]) out.title = titleMatch[1].trim();
 
-    // Location line: 📍 **Where:** <location>
     const locMatch = text.match(/📍\s*\*\*Where:\*\*\s*(.+)/);
     if (locMatch?.[1]) out.location = locMatch[1].trim();
 
-    // Start time: first <t:UNIX:f>
     const timeMatch = text.match(/<t:(\d+):f>/);
     if (timeMatch?.[1]) out.startUnix = Number(timeMatch[1]);
 
