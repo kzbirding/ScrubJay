@@ -45,7 +45,6 @@ function validateFutureTimes(startUnix: number, endUnix?: number): string | null
 }
 
 function buildRsvpRow(roleId: string) {
-  // Encode roleId into the customId so we don't depend on pins/markers.
   // format: meetup_rsvp:<action>:<roleId>
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder()
@@ -166,7 +165,7 @@ export class MeetupCommands {
         options.endTime,
       );
 
-      const starter = this.buildThreadStarter(options, startUnix, endUnix, null);
+      const starter = this.buildMeetupPanelText(options, startUnix, endUnix, null);
 
       return interaction.reply({
         ephemeral: true,
@@ -176,10 +175,9 @@ export class MeetupCommands {
             `**Title:** ${options.title}`,
             `**When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
             `**Location:** ${options.location}`,
-            options.skillLevel ? `**Skill level:** ${options.skillLevel}` : null,
             options.notes ? `**Notes:** ${options.notes}` : null,
             "",
-            "**Meetup panel text (what will be posted in the thread):**",
+            "**Meetup panel text (what will be posted as the thread starter message):**",
             "```",
             starter.length > 1800 ? starter.slice(0, 1800) + "…" : starter,
             "```",
@@ -221,7 +219,7 @@ export class MeetupCommands {
       }
       const textChannel = channel as TextChannel;
 
-      // 0) Create RSVP role FIRST (required)
+      // Create RSVP role (required)
       const rsvpRoleId = await this.createRsvpRole(interaction, options);
       if (!rsvpRoleId) {
         return interaction.editReply(
@@ -231,29 +229,23 @@ export class MeetupCommands {
 
       const meetupId = makeId();
 
-      // 1) Post a simple starter message (no buttons here)
+      // Post the meetup panel as a normal message in the channel (buttons clickable here)
+      const panelText = this.buildMeetupPanelText(options, startUnix, endUnix, rsvpRoleId);
       const starterMsg = await textChannel.send({
-        content: `🗓️ **${options.title}** — creating meetup thread…`,
+        content: panelText,
+        components: [buildRsvpRow(rsvpRoleId)],
       });
 
-      // 2) Create thread
+      // Create thread from that message
       const thread = await starterMsg.startThread({
         name: `Meetup • ${options.title}`.slice(0, 100),
         autoArchiveDuration: 1440,
         reason: "ScrubJay meetup create",
       });
 
-      // 3) Post the *real* meetup panel INSIDE the thread (buttons clickable here)
-      const panelText = this.buildThreadStarter(options, startUnix, endUnix, rsvpRoleId);
-      const panelMsg = await thread.send({
-        content: panelText,
-        components: [buildRsvpRow(rsvpRoleId)],
-      });
+      await starterMsg.pin().catch(() => null);
 
-      await panelMsg.pin().catch(() => null);
-      await starterMsg.pin().catch(() => null); // optional: keeps the parent channel tidy for mods
-
-      // 4) Try scheduled event (if perms missing, we continue)
+      // Try scheduled event (best-effort)
       let eventUrl: string | undefined;
       try {
         if (interaction.guild) {
@@ -273,7 +265,7 @@ export class MeetupCommands {
         this.logger.warn(`Event create failed (ok): ${err}`);
       }
 
-      // 5) Store meetup + update board (RAM only; wiped on restart)
+      // Store meetup + update board (RAM only)
       this.board.upsert({
         id: meetupId,
         guildId: interaction.guildId!,
@@ -289,20 +281,13 @@ export class MeetupCommands {
 
       await this.board.renderToBoard(interaction.client);
 
-      // Improve the starter msg in the parent channel
-      await starterMsg
-        .edit({
-          content: `🗓️ **${options.title}** — thread: ${thread.url}`,
-        })
-        .catch(() => null);
-
       return interaction.editReply(
         [
           "✅ Meetup created.",
           `Thread: ${thread.url}`,
           eventUrl ? `Event: ${eventUrl}` : "Event: (not created / missing perms)",
           "",
-          "RSVP buttons are pinned inside the thread.",
+          "RSVP buttons are on the pinned meetup message in the channel.",
           "Run `/meetup edit`, `/meetup cancel`, or `/meetup close` inside the thread.",
         ].join("\n"),
       );
@@ -353,24 +338,23 @@ export class MeetupCommands {
       const timeErr = validateFutureTimes(startUnix, endUnix);
       if (timeErr) return interaction.editReply(timeErr);
 
-      // Find the pinned meetup panel message (the one with meetup_rsvp buttons)
-      const panelMsg = await this.findPinnedMeetupPanel(thread);
-      if (!panelMsg) {
+      const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+      if (!starterMsg) {
         return interaction.editReply(
-          "I couldn’t find the pinned meetup panel message (it may have been unpinned or deleted).",
+          "I couldn't find the thread starter message to edit (it may have been deleted).",
         );
       }
 
-      const existingRoleId = getRoleIdFromMessageComponents(panelMsg);
+      const existingRoleId = getRoleIdFromMessageComponents(starterMsg);
       if (!existingRoleId) {
         return interaction.editReply(
-          "I couldn’t find the RSVP buttons on the pinned meetup panel message.",
+          "I couldn’t find the RSVP buttons on the starter message (they may have been removed).",
         );
       }
 
-      const newPanelText = this.buildThreadStarter(options, startUnix, endUnix, existingRoleId);
-      await panelMsg.edit({
-        content: newPanelText,
+      const newText = this.buildMeetupPanelText(options, startUnix, endUnix, existingRoleId);
+      await starterMsg.edit({
+        content: newText,
         components: [buildRsvpRow(existingRoleId)],
       });
 
@@ -388,7 +372,7 @@ export class MeetupCommands {
         await this.board.renderToBoard(interaction.client);
       }
 
-      // Best-effort: update scheduled event if we have eventUrl + perms
+      // Best-effort: update scheduled event
       if (m?.eventUrl && interaction.guild) {
         try {
           const parts = m.eventUrl.split("/");
@@ -444,7 +428,6 @@ export class MeetupCommands {
     await interaction.deferReply({ ephemeral: true });
 
     try {
-      // Make sure we can speak before locking/archiving
       if (thread.archived) {
         await thread.setArchived(false, "Temporarily unarchive to post cancel message");
       }
@@ -452,8 +435,7 @@ export class MeetupCommands {
         await thread.setLocked(false, "Temporarily unlock to post cancel message");
       }
 
-      // Mention RSVP role + say who canceled, then delete role
-      const roleId = await this.getRsvpRoleIdFromPinnedPanel(thread);
+      const roleId = await this.getRsvpRoleIdFromStarterMessage(thread);
       const canceller = `<@${interaction.user.id}>`;
 
       if (roleId) {
@@ -461,7 +443,7 @@ export class MeetupCommands {
           .send(
             [
               `<@&${roleId}>`,
-              `❌ **This meetup has been canceled.**`,
+              "❌ **This meetup has been canceled.**",
               `Canceled by: ${canceller}`,
             ].join("\n"),
           )
@@ -470,9 +452,7 @@ export class MeetupCommands {
         await this.deleteRsvpRoleById(interaction, roleId);
       } else {
         await thread
-          .send(
-            [`❌ **This meetup has been canceled.**`, `Canceled by: ${canceller}`].join("\n"),
-          )
+          .send(["❌ **This meetup has been canceled.**", `Canceled by: ${canceller}`].join("\n"))
           .catch(() => null);
       }
 
@@ -514,7 +494,7 @@ export class MeetupCommands {
     if (!canCancelOrClose(interaction, thread)) {
       return interaction.reply({
         ephemeral: true,
-        content: "Only the thread creator or a moderator can close this meetup.",
+       content: "Only the thread creator or a moderator can close this meetup.",
       });
     }
 
@@ -528,8 +508,7 @@ export class MeetupCommands {
         await thread.setLocked(false, "Temporarily unlock to post close message");
       }
 
-      // For close: no ping needed, but we DO delete the role
-      const roleId = await this.getRsvpRoleIdFromPinnedPanel(thread);
+      const roleId = await this.getRsvpRoleIdFromStarterMessage(thread);
       if (roleId) {
         await this.deleteRsvpRoleById(interaction, roleId);
       }
@@ -553,7 +532,7 @@ export class MeetupCommands {
   }
 
   // =========================
-  // RSVP helpers
+  // Helpers
   // =========================
   private async createRsvpRole(interaction: any, options: MeetupCreateDto): Promise<string | null> {
     try {
@@ -575,21 +554,10 @@ export class MeetupCommands {
     }
   }
 
-  private async findPinnedMeetupPanel(thread: ThreadChannel): Promise<any | null> {
-    try {
-      const pinned = await thread.messages.fetchPinned();
-      // Our panel is pinned and contains meetup_rsvp buttons.
-      const panel = pinned.find((m: any) => getRoleIdFromMessageComponents(m));
-      return panel ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async getRsvpRoleIdFromPinnedPanel(thread: ThreadChannel): Promise<string | null> {
-    const panel = await this.findPinnedMeetupPanel(thread);
-    if (!panel) return null;
-    return getRoleIdFromMessageComponents(panel);
+  private async getRsvpRoleIdFromStarterMessage(thread: ThreadChannel): Promise<string | null> {
+    const starterMsg = await thread.fetchStarterMessage().catch(() => null);
+    if (!starterMsg) return null;
+    return getRoleIdFromMessageComponents(starterMsg);
   }
 
   private async deleteRsvpRoleById(interaction: any, roleId: string) {
@@ -612,7 +580,6 @@ export class MeetupCommands {
   private buildEventDescription(options: MeetupPreviewDto) {
     const lines: string[] = [];
     lines.push("ScrubJay Meetup");
-    if (options.skillLevel) lines.push(`Skill level: ${options.skillLevel}`);
     if (options.notes) lines.push(`Notes: ${options.notes}`);
     lines.push("");
     lines.push(
@@ -621,7 +588,7 @@ export class MeetupCommands {
     return lines.join("\n").slice(0, 900);
   }
 
-  private buildThreadStarter(
+  private buildMeetupPanelText(
     options: MeetupPreviewDto,
     startUnix: number,
     endUnix: number | undefined,
@@ -634,13 +601,12 @@ export class MeetupCommands {
       `⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
     );
     lines.push(`📍 **Where:** ${options.location}`);
-    if (options.skillLevel) lines.push(`🎯 **Skill level:** ${options.skillLevel}`);
     if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
 
     lines.push("");
     lines.push("🛡️ **Safety / Rules**");
     lines.push("• 18+ only. No personal info required (no names/phone numbers).");
-    lines.push("• No DMs. Keep coordination in this thread.");
+    lines.push("• No DMs. Keep coordination in the thread.");
     lines.push("• Use good judgment; moderators may intervene for safety.");
 
     lines.push("");

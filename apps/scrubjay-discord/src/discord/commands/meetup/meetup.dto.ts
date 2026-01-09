@@ -1,4 +1,4 @@
-import { StringOption, BooleanOption } from "necord";
+import { StringOption } from "necord";
 
 /**
  * Discord rule:
@@ -39,13 +39,6 @@ export class MeetupPreviewDto {
   endTime?: string;
 
   @StringOption({
-    name: "skill_level",
-    description: "Skill level (optional)",
-    required: false,
-  })
-  skillLevel?: string;
-
-  @StringOption({
     name: "notes",
     description: "Extra notes (optional)",
     required: false,
@@ -84,30 +77,9 @@ export class MeetupCreateDto {
   endTime?: string;
 
   @StringOption({
-    name: "skill_level",
-    description: "Skill level (optional)",
-    required: false,
-  })
-  skillLevel?: string;
-
-  @StringOption({
     name: "notes",
     description: "Extra notes (optional)",
     required: false,
   })
   notes?: string;
-
-  @BooleanOption({
-    name: "create_rsvp_panel",
-    description: "Create RSVP panel (later)",
-    required: false,
-  })
-  createRsvpPanel?: boolean;
-
-  @BooleanOption({
-    name: "generate_graphic",
-    description: "Generate a graphic (later)",
-    required: false,
-  })
-  generateGraphic?: boolean;
 }
