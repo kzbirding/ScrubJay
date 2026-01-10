@@ -306,12 +306,6 @@ export class MeetupCommands {
       });
       await rsvpInThread.pin().catch(() => null);
 
-      // 3) Thread panel (no buttons) and pin it
-      await this.upsertThreadPanelMessage(
-        thread,
-        this.buildThreadPanelText(options, startUnix, endUnix, organizerId),
-      );
-
       // 4) Attendance message (pins itself)
       await this.upsertAttendanceMessage(thread, interaction.guildId!, rsvpRoleId).catch(() => null);
 
@@ -447,12 +441,6 @@ export class MeetupCommands {
           components: [],
         })
         .catch(() => null);
-
-      // Update thread panel
-      await this.upsertThreadPanelMessage(
-        thread,
-        this.buildThreadPanelText(options, startUnix, endUnix, existingOrganizerId),
-      );
 
       // Update pinned RSVP message inside thread (buttons message) — keep it short
       await this.upsertThreadRsvpMessage(
@@ -1048,17 +1036,7 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     }
 
     lines.push("");
-    lines.push("✅ **RSVP**");
-    if (rsvpRoleId) {
-      lines.push(`• Attendee ping role: <@&${rsvpRoleId}>`);
-      lines.push("• Organizer/mods may mention the role above for updates.");
-    }
-
-    if (threadUrl) {
-      lines.push("");
-      lines.push(`🧵 **Meetup thread:** ${threadUrl}`);
-      lines.push("• RSVP buttons are pinned inside the thread.");
-    }
+    lines.push(`✅ **RSVP inside the meetup thread: ${threadUrl}**`);
 
     return lines.join("\n");
   }
@@ -1072,6 +1050,10 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     rsvpRoleId: string | null,
   ) {
     const lines: string[] = [];
+
+    //Tag
+    lines.push(`[SCRUBJAY_MEETUP_THREAD_PANEL]`)
+    lines.push("")
 
     lines.push(`✅ **RSVP for:** **[${options.county}] ${options.title}**`);
     lines.push(
