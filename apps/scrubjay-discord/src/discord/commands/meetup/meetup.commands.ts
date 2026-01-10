@@ -866,20 +866,26 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
   try {
     this.logger.debug(`[RSVP] Checking thread ${thread.id}`);
 
-    // 1) Prefer pinned messages (new design)
+    // 1) Prefer pinned messages (new design pins RSVP message in-thread)
     const pinnedResp = await thread.messages.fetchPins().catch((e) => {
       this.logger.debug(`[RSVP] Failed to fetch pins for ${thread.id}: ${e}`);
       return null;
     });
 
-    const pinned = (pinnedResp as any)?.messages ?? pinnedResp;
+    // discord.js typings vary:
+    // - sometimes fetchPins() returns Collection<string, Message>
+    // - sometimes it returns { messages: Collection<string, Message> }
+    const pinnedMsgs: any =
+      pinnedResp && (pinnedResp as any).messages ? (pinnedResp as any).messages : pinnedResp;
 
-    if (pinned) {
+    if (pinnedMsgs) {
       this.logger.debug(`[RSVP] Scanning pinned messages in ${thread.id}`);
-      for (const [, m] of pinned as any) {
+
+      // Collection<string, Message> -> iterate values()
+      for (const m of pinnedMsgs.values()) {
         const roleId = getRoleIdFromMessageComponents(m);
         if (roleId) {
-          this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message`);
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message ${m.id}`);
           return roleId;
         }
       }
@@ -887,7 +893,7 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
       this.logger.debug(`[RSVP] No pinned messages in ${thread.id}`);
     }
 
-    // 2) Fallback: starter message
+    // 2) Fallback: starter message (old design had buttons on starter)
     const starter = await thread.fetchStarterMessage().catch(() => null);
     if (starter) {
       this.logger.debug(`[RSVP] Checking starter message in ${thread.id}`);
@@ -904,7 +910,7 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
     if (recent) {
       this.logger.debug(`[RSVP] Scanning recent messages in ${thread.id}`);
-      for (const [, m] of recent as any) {
+      for (const m of recent.values()) {
         const roleId = getRoleIdFromMessageComponents(m);
         if (roleId) {
           this.logger.debug(`[RSVP] Found roleId ${roleId} in recent messages`);
@@ -920,7 +926,6 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     return null;
   }
 }
-
 
 
 
