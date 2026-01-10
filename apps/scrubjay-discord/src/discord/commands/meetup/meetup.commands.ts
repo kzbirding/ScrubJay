@@ -1018,6 +1018,9 @@ public async onReady([client]: [any]) {
       const roleId = await this.getRsvpRoleIdFromThread(thread).catch(() => null);
       if (!roleId) continue;
 
+      // 🔑 REQUIRED: hydrate member cache so role.members works
+      await thread.guild.members.fetch().catch(() => null);
+
       await this.upsertAttendanceMessage(thread, m.guildId, roleId).catch(() => null);
 
       // micro-throttle: avoid burst requests at startup
