@@ -862,38 +862,67 @@ private async upsertAttendanceMessage(
     if (created) await created.pin().catch(() => null);
   }
 
-  private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | null> {
-    try {
-      // 1) Prefer pinned messages (new design pins RSVP buttons message)
-      const pinned = await thread.messages.fetchPinned().catch(() => null);
-      if (pinned) {
-        for (const m of pinned.values()) {
-          const roleId = getRoleIdFromMessageComponents(m);
-          if (roleId) return roleId;
+private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | null> {
+  try {
+    this.logger.debug(`[RSVP] Checking thread ${thread.id}`);
+
+    // 1) Prefer pinned messages (new design)
+    const pinnedResp = await thread.messages.fetchPins().catch((e) => {
+      this.logger.debug(`[RSVP] Failed to fetch pins for ${thread.id}: ${e}`);
+      return null;
+    });
+
+    const pinned = (pinnedResp as any)?.messages ?? pinnedResp;
+
+    if (pinned) {
+      this.logger.debug(`[RSVP] Scanning pinned messages in ${thread.id}`);
+      for (const [, m] of pinned as any) {
+        const roleId = getRoleIdFromMessageComponents(m);
+        if (roleId) {
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message`);
+          return roleId;
         }
       }
-
-      // 2) Fallback: starter message (old design had buttons on starter)
-      const starter = await thread.fetchStarterMessage().catch(() => null);
-      if (starter) {
-        const roleId = getRoleIdFromMessageComponents(starter);
-        if (roleId) return roleId;
-      }
-
-      // 3) Last fallback: recent messages (in case it was unpinned)
-      const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
-      if (recent) {
-        for (const m of recent.values()) {
-          const roleId = getRoleIdFromMessageComponents(m);
-          if (roleId) return roleId;
-        }
-      }
-
-      return null;
-    } catch {
-      return null;
+    } else {
+      this.logger.debug(`[RSVP] No pinned messages in ${thread.id}`);
     }
+
+    // 2) Fallback: starter message
+    const starter = await thread.fetchStarterMessage().catch(() => null);
+    if (starter) {
+      this.logger.debug(`[RSVP] Checking starter message in ${thread.id}`);
+      const roleId = getRoleIdFromMessageComponents(starter);
+      if (roleId) {
+        this.logger.debug(`[RSVP] Found roleId ${roleId} in starter message`);
+        return roleId;
+      }
+    } else {
+      this.logger.debug(`[RSVP] No starter message for ${thread.id}`);
+    }
+
+    // 3) Final fallback: recent messages
+    const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
+    if (recent) {
+      this.logger.debug(`[RSVP] Scanning recent messages in ${thread.id}`);
+      for (const [, m] of recent as any) {
+        const roleId = getRoleIdFromMessageComponents(m);
+        if (roleId) {
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent messages`);
+          return roleId;
+        }
+      }
+    }
+
+    this.logger.debug(`[RSVP] ❌ No RSVP roleId found for thread ${thread.id}`);
+    return null;
+  } catch (e) {
+    this.logger.warn(`[RSVP] Error while resolving roleId for ${thread.id}: ${e}`);
+    return null;
   }
+}
+
+
+
 
   private buildThreadPanelText(
     options: MeetupCreateDto,
