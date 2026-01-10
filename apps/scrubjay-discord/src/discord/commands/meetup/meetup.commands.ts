@@ -863,17 +863,33 @@ private async upsertAttendanceMessage(
   }
 
   private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | null> {
-    // Prefer pinned RSVP message; fallback to recent messages.
     try {
+      // 1) Prefer pinned messages (new design pins RSVP buttons message)
       const pinned = await thread.messages.fetchPinned().catch(() => null);
-      const pinnedRoleId =
-        pinned?.map((m) => getRoleIdFromMessageComponents(m)).find((id) => Boolean(id)) ?? null;
-      if (pinnedRoleId) return pinnedRoleId;
+      if (pinned) {
+        for (const m of pinned.values()) {
+          const roleId = getRoleIdFromMessageComponents(m);
+          if (roleId) return roleId;
+        }
+      }
 
+      // 2) Fallback: starter message (old design had buttons on starter)
+      const starter = await thread.fetchStarterMessage().catch(() => null);
+      if (starter) {
+        const roleId = getRoleIdFromMessageComponents(starter);
+        if (roleId) return roleId;
+      }
+
+      // 3) Last fallback: recent messages (in case it was unpinned)
       const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
-      const recentRoleId =
-        recent?.map((m) => getRoleIdFromMessageComponents(m)).find((id) => Boolean(id)) ?? null;
-      return recentRoleId ?? null;
+      if (recent) {
+        for (const m of recent.values()) {
+          const roleId = getRoleIdFromMessageComponents(m);
+          if (roleId) return roleId;
+        }
+      }
+
+      return null;
     } catch {
       return null;
     }
