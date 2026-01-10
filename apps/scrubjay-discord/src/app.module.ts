@@ -33,6 +33,7 @@ const configSchema = Joi.object({
         ],
         intents: [
           GatewayIntentBits.Guilds,
+          GatewayIntentBits.GuildMembers,
           GatewayIntentBits.GuildMessages,
           GatewayIntentBits.GuildMessageReactions,
         ],

@@ -782,8 +782,8 @@ private async upsertAttendanceMessage(
   const guild = thread.guild;
   if (!guild) return;
 
-  // ✅ Populate member cache (cheap at ~70 members)
-  await guild.members.fetch().catch(() => null);
+await guild.roles.fetch(roleId).catch(() => null);
+await guild.members.fetch({ withPresences: false }).catch(() => null);
 
   const mentions = [...guild.members.cache.values()]
     .filter((m) => m.roles?.cache?.has(roleId))
@@ -792,9 +792,14 @@ private async upsertAttendanceMessage(
 
   const existing = await this.findAttendanceMessage(thread);
 
-  // 🛡️ Safety: never overwrite a non-empty list with an empty one
-  if (existing && mentions.length === 0) return;
-
+// 🛡️ Safety: never overwrite a non-empty list with an empty one
+if (existing && mentions.length === 0) {
+  this.logger.warn(
+    `[Attendance] computed 0 members for roleId=${roleId} in thread=${thread.id}. ` +
+      `guildCache=${guild.members.cache.size}. Not overwriting existing list.`,
+  );
+  return;
+}
   const content = this.buildAttendanceText(mentions);
 
   if (existing) {
