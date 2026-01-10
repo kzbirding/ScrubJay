@@ -104,6 +104,34 @@ function getRoleIdFromMessageComponents(msg: any): string | null {
   }
 }
 
+function getRoleIdFromText(content: string): string | null {
+  const m = (content ?? "").match(/<@&(\d+)>/);
+  return m?.[1] ?? null;
+}
+
+function asMessageArray(pins: any): any[] {
+  if (!pins) return [];
+
+  if (typeof pins.values === "function") {
+    return Array.from(pins.values());
+  }
+
+  const msgs = pins.messages ?? pins;
+
+  if (msgs && typeof msgs.values === "function") {
+    return Array.from(msgs.values());
+  }
+
+  if (Array.isArray(msgs)) return msgs;
+
+  if (msgs && typeof msgs === "object") {
+    return Object.values(msgs);
+  }
+
+  return [];
+}
+
+
 // =========================
 // Organizer + Attendance helpers
 // =========================
@@ -866,41 +894,59 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
   try {
     this.logger.debug(`[RSVP] Checking thread ${thread.id}`);
 
-    // 1) Prefer pinned messages (new design pins RSVP message in-thread)
-    const pinnedResp = await thread.messages.fetchPins().catch((e) => {
+    // 1) PINS FIRST (new design)
+    const pinsResp = await (thread.messages as any).fetchPins?.().catch((e: any) => {
       this.logger.debug(`[RSVP] Failed to fetch pins for ${thread.id}: ${e}`);
       return null;
     });
 
-    // discord.js typings vary:
-    // - sometimes fetchPins() returns Collection<string, Message>
-    // - sometimes it returns { messages: Collection<string, Message> }
-    const pinnedMsgs: any =
-      pinnedResp && (pinnedResp as any).messages ? (pinnedResp as any).messages : pinnedResp;
+    // Some discord.js versions use fetchPinned() instead of fetchPins()
+    const pinsResp2 =
+      pinsResp ??
+      (await (thread.messages as any).fetchPinned?.().catch((e: any) => {
+        this.logger.debug(`[RSVP] Failed to fetch pinned for ${thread.id}: ${e}`);
+        return null;
+      }));
 
-    if (pinnedMsgs) {
-      this.logger.debug(`[RSVP] Scanning pinned messages in ${thread.id}`);
+    const pinnedMessages = asMessageArray(pinsResp2);
+    this.logger.debug(`[RSVP] Pinned messages in ${thread.id}: ${pinnedMessages.length}`);
 
-      // Collection<string, Message> -> iterate values()
-      for (const m of pinnedMsgs.values()) {
-        const roleId = getRoleIdFromMessageComponents(m);
+    // 1a) Prefer RSVP buttons in pinned messages
+    for (const m of pinnedMessages) {
+      const roleId = getRoleIdFromMessageComponents(m);
+      if (roleId) {
+        this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned buttons message ${m.id}`);
+        return roleId;
+      }
+    }
+
+    // 1b) Fallback: pinned THREAD_PANEL_TAG contains <@&ROLEID>
+    for (const m of pinnedMessages) {
+      const content = m?.content ?? "";
+      if (content.includes("[SCRUBJAY_MEETUP_THREAD_PANEL]")) {
+        const roleId = getRoleIdFromText(content);
         if (roleId) {
-          this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message ${m.id}`);
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned THREAD_PANEL_TAG ${m.id}`);
           return roleId;
         }
       }
-    } else {
-      this.logger.debug(`[RSVP] No pinned messages in ${thread.id}`);
     }
 
     // 2) Fallback: starter message (old design had buttons on starter)
     const starter = await thread.fetchStarterMessage().catch(() => null);
     if (starter) {
       this.logger.debug(`[RSVP] Checking starter message in ${thread.id}`);
-      const roleId = getRoleIdFromMessageComponents(starter);
-      if (roleId) {
-        this.logger.debug(`[RSVP] Found roleId ${roleId} in starter message`);
-        return roleId;
+
+      const roleIdFromButtons = getRoleIdFromMessageComponents(starter);
+      if (roleIdFromButtons) {
+        this.logger.debug(`[RSVP] Found roleId ${roleIdFromButtons} in starter message`);
+        return roleIdFromButtons;
+      }
+
+      const roleIdFromText = getRoleIdFromText(starter.content ?? "");
+      if (roleIdFromText) {
+        this.logger.debug(`[RSVP] Found roleId ${roleIdFromText} in starter text`);
+        return roleIdFromText;
       }
     } else {
       this.logger.debug(`[RSVP] No starter message for ${thread.id}`);
@@ -910,10 +956,19 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     const recent = await thread.messages.fetch({ limit: 50 }).catch(() => null);
     if (recent) {
       this.logger.debug(`[RSVP] Scanning recent messages in ${thread.id}`);
+
       for (const m of recent.values()) {
         const roleId = getRoleIdFromMessageComponents(m);
         if (roleId) {
-          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent messages`);
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message components`);
+          return roleId;
+        }
+      }
+
+      for (const m of recent.values()) {
+        const roleId = getRoleIdFromText(m.content ?? "");
+        if (roleId) {
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message text`);
           return roleId;
         }
       }
@@ -922,11 +977,12 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     this.logger.debug(`[RSVP] ❌ No RSVP roleId found for thread ${thread.id}`);
     return null;
   } catch (e) {
-    this.logger.warn(`[RSVP] Error while resolving roleId for ${thread.id}: ${e}`);
+    this.logger.warn(
+      `[RSVP] Error while resolving roleId for ${thread.id}: ${e}`,
+    );
     return null;
   }
 }
-
 
 
   private buildThreadPanelText(
