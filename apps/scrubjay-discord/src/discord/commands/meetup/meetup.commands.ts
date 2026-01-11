@@ -191,7 +191,28 @@ function buildRsvpRoleNameFromOptions(options: MeetupCreateDto): string {
 export class MeetupCommands {
   private readonly logger = new Logger(MeetupCommands.name);
 
+  private readonly trustedOrganizerRoleId = process.env.TRUSTED_ORGANIZER_ROLE_ID ?? null;
+
   public constructor(private readonly board: MeetupBoardService) {}
+
+  private async getTrustedOrganizerStatus(
+    interaction: any,
+    userId: string | null,
+  ): Promise<boolean | null> {
+    const roleId = this.trustedOrganizerRoleId;
+    if (!roleId || !userId) return null;
+
+    const guild = interaction?.guild;
+    if (!guild) return null;
+
+    try {
+      const member = await guild.members.fetch(userId);
+      return Boolean(member?.roles?.cache?.has(roleId));
+    } catch {
+      return null;
+    }
+  }
+
 
   // =========================
   // RSVP button handler
@@ -273,6 +294,8 @@ export class MeetupCommands {
       const textChannel = channel as TextChannel;
 
       const organizerId = interaction.user?.id ?? null;
+      const trustedStatus = await this.getTrustedOrganizerStatus(interaction, organizerId);
+
 
       const rsvpRoleId = await this.createRsvpRole(interaction, options);
       if (!rsvpRoleId) {
@@ -300,6 +323,7 @@ export class MeetupCommands {
         endUnix,
         rsvpRoleId,
         organizerId,
+        trustedStatus,
         null, // thread link not available yet
       );
 
@@ -321,6 +345,7 @@ export class MeetupCommands {
         endUnix,
         rsvpRoleId,
         organizerId,
+        trustedStatus,
         thread.url,
       );
       await starterMsg.edit({ content: finalParentText, components: [] }).catch(() => null);
@@ -450,6 +475,8 @@ export class MeetupCommands {
 
       const existingOrganizerId =
         getOrganizerIdFromPanelText(starterMsg.content ?? "") ?? interaction.user?.id ?? null;
+      const trustedStatus = await this.getTrustedOrganizerStatus(interaction, existingOrganizerId);
+
 
       // Update parent message text (NO buttons), include thread link
       const newParentText = this.buildMeetupPanelText(
@@ -458,6 +485,7 @@ export class MeetupCommands {
         endUnix,
         existingRoleId,
         existingOrganizerId,
+        trustedStatus,
         thread.url,
       );
 
@@ -1170,6 +1198,7 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     endUnix: number | undefined,
     rsvpRoleId: string | null,
     organizerId: string | null,
+  isTrustedOrganizer: boolean | null,
     threadUrl: string | null,
   ) {
     const lines: string[] = [];
@@ -1183,6 +1212,13 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
 
     if (organizerId) {
       lines.push(`🧑‍💼 **Organizer:** <@${organizerId}>`);
+      if (isTrustedOrganizer === true) {
+        lines.push(`☑️ Trusted Organizer`);
+      } else if (isTrustedOrganizer === false) {
+        lines.push(
+          `ℹ️ This organizer isn’t marked as a Trusted Organizer yet. Please use normal meetup best practices.`,
+        );
+      }
       lines.push(`${ORGANIZER_TAG_PREFIX}${organizerId})`);
     }
 
