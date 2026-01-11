@@ -10,7 +10,7 @@ import {
   type ThreadChannel,
   type Message,
 } from "discord.js";
-import { Context, On, Options, Subcommand, type SlashCommandContext } from "necord";
+import { Context, IntegerOption, On, Options, Subcommand, type SlashCommandContext } from "necord";
 
 import { MeetupCommand } from "./meetup.decorator";
 import { MeetupCreateDto } from "./meetup.dto";
@@ -51,6 +51,32 @@ function assertMeetupCreateChannel(interaction: any): string | null {
   }
 
   return null;
+}
+
+// ✅ /meetup history channel gate (must be run in #meetups)
+function assertMeetupHistoryChannel(interaction: any): string | null {
+  const allowedId = process.env.MEETUP_CHANNEL_ID;
+  if (!allowedId) return "MEETUP_CHANNEL_ID is not set on the bot.";
+
+  const ch = interaction.channel;
+  if (!ch || ch.type !== ChannelType.GuildText) {
+    return `Use this command in <#${allowedId}>.`;
+  }
+
+  if (ch.id !== allowedId) {
+    return `Use this command in <#${allowedId}>.`;
+  }
+
+  return null;
+}
+
+class MeetupHistoryDto {
+  @IntegerOption({
+    name: "page",
+    description: "Page number (1 = oldest). Omit for most recent.",
+    required: false,
+  })
+  public page?: number;
 }
 
 function buildRsvpRow(roleId: string) {
@@ -539,6 +565,7 @@ export class MeetupCommands {
               `<@&${roleId}>`,
               "❌ **This meetup has been canceled.**",
               `Canceled by: ${canceller}`,
+              "[MEETUP_CANCELED]"
             ].join("\n"),
           )
           .catch(() => null);
@@ -546,7 +573,12 @@ export class MeetupCommands {
         await this.deleteRsvpRoleById(interaction, roleId);
       } else {
         await thread
-          .send(["❌ **This meetup has been canceled.**", `Canceled by: ${canceller}`].join("\n"))
+          .send(
+            [
+              "❌ **This meetup has been canceled.**",
+              `Canceled by: ${canceller}`,
+              "[MEETUP_CANCELED]"
+            ].join("\n"))
           .catch(() => null);
       }
 
@@ -566,65 +598,184 @@ export class MeetupCommands {
     }
   }
 
-  @Subcommand({
-    name: "close",
-    description: "Mark a meetup as completed (run inside the meetup thread)",
-  })
-  public async onClose(@Context() [interaction]: SlashCommandContext) {
-    const ch = interaction.channel;
+@Subcommand({
+  name: "close",
+  description: "Mark a meetup as completed (run inside the meetup thread)",
+})
+public async onClose(@Context() [interaction]: SlashCommandContext) {
+  const ch = interaction.channel;
 
-    if (
-      !ch ||
-      (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)
-    ) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "Run this command inside the meetup thread you want to close.",
-      });
-    }
-
-    const thread = ch as ThreadChannel;
-
-    const canClose = await this.canManageMeetup(interaction, thread);
-    if (!canClose) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "Only the meetup organizer or a moderator can close this meetup.",
-      });
-    }
-
-    await interaction.deferReply({ ephemeral: true });
-
-    try {
-      if (thread.archived) {
-        await thread.setArchived(false, "Temporarily unarchive to post close message");
-      }
-      if (thread.locked) {
-        await thread.setLocked(false, "Temporarily unlock to post close message");
-      }
-
-      const roleId = await this.getRsvpRoleIdFromThread(thread);
-      if (roleId) {
-        await this.deleteRsvpRoleById(interaction, roleId);
-      }
-
-      await thread.send("✅ **This meetup has been marked as completed.**").catch(() => null);
-
-      await thread.setLocked(true, "Meetup closed");
-      await thread.setArchived(true, "Meetup closed");
-
-      const m = this.board.getByThreadId(thread.id);
-      if (m) {
-        this.board.setStatus(m.id, "CLOSED");
-        await this.board.renderToBoard(interaction.client);
-      }
-
-      return interaction.editReply("✅ Closed. Thread archived/locked.");
-    } catch (err: any) {
-      this.logger.error(`Meetup close failed: ${err}`);
-      return interaction.editReply(err?.message ?? "Close failed.");
-    }
+  if (!ch || (ch.type !== ChannelType.PublicThread && ch.type !== ChannelType.PrivateThread)) {
+    return interaction.reply({
+      ephemeral: true,
+      content: "Run this command inside the meetup thread you want to close.",
+    });
   }
+
+  const thread = ch as ThreadChannel;
+
+  const canClose = await this.canManageMeetup(interaction, thread);
+  if (!canClose) {
+    return interaction.reply({
+      ephemeral: true,
+      content: "Only the meetup organizer or a moderator can close this meetup.",
+    });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    if (thread.archived) {
+      await thread.setArchived(false, "Temporarily unarchive to post close message");
+    }
+    if (thread.locked) {
+      await thread.setLocked(false, "Temporarily unlock to post close message");
+    }
+
+    const roleId = await this.getRsvpRoleIdFromThread(thread);
+    if (roleId) {
+      await this.deleteRsvpRoleById(interaction, roleId);
+    }
+
+    await thread
+      .send(
+        [
+          "✅ **This meetup has been marked as completed.**",
+          `Closed by: ${interaction.user}`,
+          `[MEETUP_COMPLETE]`,
+        ].join("\n"),
+      )
+      .catch(() => null);
+
+    await thread.setLocked(true, "Meetup closed");
+    await thread.setArchived(true, "Meetup closed");
+
+    const m = this.board.getByThreadId(thread.id);
+    if (m) {
+      this.board.setStatus(m.id, "CLOSED");
+      await this.board.renderToBoard(interaction.client);
+    }
+
+    return interaction.editReply("✅ Closed. Thread archived/locked.");
+  } catch (err: any) {
+    this.logger.error(`Meetup close failed: ${err}`);
+    return interaction.editReply(err?.message ?? "Close failed.");
+  }
+}
+
+@Subcommand({
+  name: "history",
+  description: "Show completed meetups (run in #meetups)",
+})
+public async onHistory(
+  @Context() [interaction]: SlashCommandContext,
+  @Options() options: MeetupHistoryDto,
+) {
+  const allowedId = process.env.MEETUP_CHANNEL_ID!;
+  const member: any = interaction.member;
+
+  // "Mod" = can manage threads (or admin). Adjust flags if you prefer.
+  const isMod =
+    Boolean(
+      member?.permissions?.has?.(PermissionsBitField.Flags.ManageThreads) ||
+        member?.permissions?.has?.(PermissionsBitField.Flags.Administrator),
+    );
+
+  // Non-mods must run this in #meetups
+  const gate = assertMeetupHistoryChannel(interaction);
+  if (gate && !isMod) {
+    return interaction.reply({ ephemeral: true, content: gate });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    // Always scan the real #meetups channel, even if the command was run elsewhere (mods)
+    const meetupsChannel = await interaction.guild?.channels.fetch(allowedId).catch(() => null);
+    if (!meetupsChannel || meetupsChannel.type !== ChannelType.GuildText) {
+      return interaction.editReply("Meetups channel is missing or not a text channel.");
+    }
+
+    const ch = meetupsChannel as TextChannel;
+
+    // Fetch all archived threads under #meetups (public + private)
+    const fetchAllArchived = async (type: "public" | "private") => {
+      const out: ThreadChannel[] = [];
+      let before: string | undefined = undefined;
+      while (true) {
+        const res = await ch.threads.fetchArchived({ type, limit: 100, before }).catch(() => null);
+        if (!res) break;
+
+        const threads = Array.from(res.threads.values()) as ThreadChannel[];
+        out.push(...threads);
+
+        if (threads.length < 100) break;
+        before = threads[threads.length - 1]?.id;
+        if (!before) break;
+      }
+      return out;
+    };
+
+    const [archivedPublic, archivedPrivate] = await Promise.all([
+      fetchAllArchived("public"),
+      fetchAllArchived("private"),
+    ]);
+
+    const allThreads = [...archivedPublic, ...archivedPrivate];
+
+    // Find threads that contain the completion marker message
+    const completed: Array<{ thread: ThreadChannel; completedAtMs: number }> = [];
+
+    for (const t of allThreads) {
+      // Safety: only consider threads that belong to the configured meetups channel
+      if (t.parentId && t.parentId !== allowedId) continue;
+
+      const msgs = await t.messages.fetch({ limit: 50 }).catch(() => null);
+      if (!msgs) continue;
+
+      const marker = msgs.find((m) => (m.content ?? "").includes("[MEETUP_COMPLETE]"));
+      if (!marker) continue;
+
+      completed.push({ thread: t, completedAtMs: marker.createdTimestamp });
+    }
+
+    if (completed.length === 0) {
+      return interaction.editReply("No completed meetups yet.");
+    }
+
+    // Sort oldest -> newest so pages behave like you described (page 1 = oldest)
+    completed.sort((a, b) => a.completedAtMs - b.completedAtMs);
+
+    const pageSize = 10;
+    const totalPages = Math.max(1, Math.ceil(completed.length / pageSize));
+    const requested = options?.page ?? totalPages;
+    const page = Math.min(Math.max(requested, 1), totalPages);
+
+    const start = (page - 1) * pageSize;
+    const slice = completed.slice(start, start + pageSize);
+
+    const lines: string[] = [];
+    lines.push(`**Meetup history (page ${page}/${totalPages})**`);
+    lines.push(`Completed meetups: **${completed.length}**`);
+    lines.push("");
+
+    for (const item of slice) {
+      const unix = Math.floor(item.completedAtMs / 1000);
+      const link = `https://discord.com/channels/${interaction.guildId}/${item.thread.id}`;
+      lines.push(`• <t:${unix}:D> — **${item.thread.name}** — ${link}`);
+    }
+
+    if (requested !== page) {
+      lines.push("");
+      lines.push(`Requested page ${requested} is out of range. Showing page ${page}.`);
+    }
+
+    return interaction.editReply(lines.join("\n"));
+  } catch (err: any) {
+    this.logger.error(`Meetup history failed: ${err}`);
+    return interaction.editReply(err?.message ?? "History failed.");
+  }
+}
 
   // =========================
   // Permission helpers
