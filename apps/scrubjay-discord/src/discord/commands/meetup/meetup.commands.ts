@@ -3,7 +3,7 @@ const MEETUP_HELP_TEXT = `
 **Meetups — quick guide 🌿**
 
 • Use **/meetup create** to host a birding meetup. It'll open a thread for you and place your meetup on the meetup board 
-• In the thread, users can RSVP using the buttons in the pinned messages. This wil automatically update the attendance list
+• In the thread, users can RSVP using the buttons in the pinned messages. This will automatically update the attendance list
 • A unique role is also created for your meetup, which you can mention for important updates.
 
 • Use **/meetup edit** within the meetup thread edit any aspect of the meetup title, date, time, etc.
