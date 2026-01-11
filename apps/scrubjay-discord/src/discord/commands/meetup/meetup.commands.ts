@@ -1,3 +1,19 @@
+
+const MEETUP_HELP_TEXT = `
+**Meetups — quick guide 🌿**
+
+• Use **/meetup create** to host a birding meetup. It'll open a thread for you and place your meetup on the meetup board 
+• In the thread, users can RSVP using the buttons in the pinned messages. This wil automatically update the attendance list
+• A unique role is also created for your meetup, which you can mention for important updates.
+
+• Use **/meetup edit** within the meetup thread edit any aspect of the meetup title, date, time, etc.
+• Use **/meetup cancel** within the meetup thread to cancel the meetup and notify all attendees.
+• Use **/meetup close** to mark a meetup as complete and archive it.
+
+If you’re unsure, it’s okay to ask in the thread 🙂
+`;
+
+
 import { Injectable, Logger } from "@nestjs/common";
 import {
   ActionRowBuilder,
@@ -1223,7 +1239,7 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     }
 
     lines.push("");
-    lines.push(`✅ **RSVP inside the meetup thread: ${threadUrl}**`);
+    lines.push(`✅ **RSVP using the buttons inside the meetup thread: ${threadUrl}**`);
 
     return lines.join("\n");
   }
@@ -1297,4 +1313,27 @@ public async onReady([client]: [any]) {
   }
 }
 
+
+  @Subcommand({
+    name: "help",
+    description: "Learn how meetups work",
+  })
+  public async onHelp(
+    @Context() [interaction]: SlashCommandContext,
+  ) {
+    const allowedId = process.env.MEETUP_CHANNEL_ID!;
+    const ch = interaction.channel;
+
+    if (!ch || ch.id !== allowedId) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Run this command in the meetups channel.",
+      });
+    }
+
+    return interaction.reply({
+      ephemeral: true,
+      content: MEETUP_HELP_TEXT,
+    });
+  }
 }
