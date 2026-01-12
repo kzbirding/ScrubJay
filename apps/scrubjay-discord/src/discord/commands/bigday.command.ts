@@ -21,6 +21,23 @@ class BigdaySubmitDto {
   checklist!: string;
 }
 
+class BigdayOpenDto {
+  @StringOption({
+    name: "start",
+    description: "Start date (e.g., 2026-01-12, 1/12/2026, Jan 12 2026)",
+    required: true,
+  })
+  @IsString()
+  start!: string;
+
+  @StringOption({
+    name: "end",
+    description: "End date (e.g., 2026-01-12, 1/12/2026, Jan 12 2026)",
+    required: true,
+  })
+  @IsString()
+  end!: string;
+}
 
 import { getBigdaySheetId, getSheetsClient } from "@/sheets/sheets.client";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
@@ -59,6 +76,99 @@ function extractISODateFromObservedAt(observedAt: string): string | null {
   return null;
 }
 
+function parseUserDateToISO(input: unknown): string | null {
+  if (typeof input !== "string") return null;
+  const raw = input.trim();
+  if (!raw) return null;
+
+  const pad2 = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  const clampYear = (y: number) => {
+    // allow 2-digit years like 26 -> 2026
+    if (y < 100) return y >= 70 ? 1900 + y : 2000 + y;
+    return y;
+  };
+
+  // 1) YYYY-MM-DD or YYYY/MM/DD
+  const m1 = raw.match(/^\s*(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})\s*$/);
+  if (m1) {
+    const yyyy = Number(m1[1]);
+    const mm = Number(m1[2]);
+    const dd = Number(m1[3]);
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+    }
+  }
+
+  // 2) MM/DD/YYYY, M/D/YY, MM-DD-YYYY
+  const m2 = raw.match(/^\s*(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})\s*$/);
+  if (m2) {
+    const mm = Number(m2[1]);
+    const dd = Number(m2[2]);
+    const yyyy = clampYear(Number(m2[3]));
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+    }
+  }
+
+  // 3) "Jan 12 2026" / "January 12, 2026" / "12 Jan 2026"
+  const months: Record<string, number> = {
+    jan: 1,
+    january: 1,
+    feb: 2,
+    february: 2,
+    mar: 3,
+    march: 3,
+    apr: 4,
+    april: 4,
+    may: 5,
+    jun: 6,
+    june: 6,
+    jul: 7,
+    july: 7,
+    aug: 8,
+    august: 8,
+    sep: 9,
+    sept: 9,
+    september: 9,
+    oct: 10,
+    october: 10,
+    nov: 11,
+    november: 11,
+    dec: 12,
+    december: 12,
+  };
+
+  const cleaned = raw.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  const parts = cleaned.split(" ");
+  if (parts.length === 3) {
+    const p0 = parts[0].toLowerCase();
+    const p1 = parts[1].toLowerCase();
+    const p2 = parts[2].toLowerCase();
+
+    // Month Day Year
+    if (months[p0]) {
+      const mm = months[p0];
+      const dd = Number(p1);
+      const yyyy = clampYear(Number(p2));
+      if (dd >= 1 && dd <= 31 && yyyy > 0) {
+        return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+      }
+    }
+
+    // Day Month Year
+    if (months[p1]) {
+      const dd = Number(p0);
+      const mm = months[p1];
+      const yyyy = clampYear(Number(p2));
+      if (dd >= 1 && dd <= 31 && yyyy > 0) {
+        return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+      }
+    }
+  }
+
+  return null;
+}
+
 
 @Injectable()
 @SlashCommand({
@@ -75,7 +185,10 @@ export class BigdayCommand {
     name: "open",
     description: "Open Big Day submissions (mod only)",
   })
-  public async onOpen(@Context() [interaction]: SlashCommandContext) {
+  public async onOpen(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() options: BigdayOpenDto,
+  ) {
     const member = interaction.member;
     const modRoleId = process.env.MOD_ID;
 
@@ -108,18 +221,34 @@ export class BigdayCommand {
         });
       }
 
+      const startISO = parseUserDateToISO(options.start);
+      const endISO = parseUserDateToISO(options.end);
+      if (!startISO || !endISO) {
+        return interaction.reply({
+          ephemeral: true,
+          content:
+            "❌ Invalid date format. Try **YYYY-MM-DD**, **M/D/YYYY**, or **Jan 12 2026**.",
+        });
+      }
+      if (endISO < startISO) {
+        return interaction.reply({
+          ephemeral: true,
+          content: "❌ End date must be on or after the start date.",
+        });
+      }
+
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: "Event!A2:C2",
+        range: "Event!A2:E2",
         valueInputOption: "RAW",
         requestBody: {
-          values: [["open", nowIso(), ""]],
+          values: [["open", nowIso(), "", startISO, endISO]],
         },
       });
 
       return interaction.reply({
         ephemeral: false,
-        content: "✅ Big Day is now **OPEN**.",
+        content: `✅ Big Day is now **OPEN** (**${startISO}** to **${endISO}**).`,
       });
     } catch (err: any) {
       return interaction.reply({
