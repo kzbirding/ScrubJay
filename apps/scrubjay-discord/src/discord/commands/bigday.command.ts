@@ -8,6 +8,20 @@ import {
 } from "necord";
 import { ChatInputCommandInteraction } from "discord.js";
 
+import { StringOption } from "necord";
+import { IsString } from "class-validator";
+
+class BigdaySubmitDto {
+  @StringOption({
+    name: "checklist",
+    description: "eBird checklist link or ID (e.g., S123456789)",
+    required: true,
+  })
+  @IsString()
+  checklist!: string;
+}
+
+
 import { getBigdaySheetId, getSheetsClient } from "@/sheets/sheets.client";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
 
@@ -15,11 +29,13 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function extractChecklistId(input: string): string | null {
+function extractChecklistId(input: unknown): string | null {
+  if (typeof input !== "string") return null;
   // supports full URL or raw checklist id (S123456789)
   const m = input.match(/S\d+/i);
   return m ? m[0].toUpperCase() : null;
 }
+
 
 @Injectable()
 @SlashCommand({
@@ -160,8 +176,10 @@ export class BigdayCommand {
   })
   public async onSubmit(
     @Context() [interaction]: SlashCommandContext,
-    @Options("checklist") checklistInput: string,
+    @Options() options: BigdaySubmitDto,
   ) {
+    const checklistInput = options.checklist;
+
     const checklistId = extractChecklistId(checklistInput);
     if (!checklistId) {
       return interaction.reply({
