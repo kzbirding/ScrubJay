@@ -9,6 +9,22 @@ import {
 } from "necord";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
 
+function assertMod(interaction: any): string | null {
+  const modRoleId = process.env.MOD_ID;
+  if (!modRoleId) return "❌ MOD_ID is not configured on the bot.";
+
+  // Must be used inside a guild
+  const member: any = interaction?.member;
+  if (!member) return "❌ This command can only be used in the server.";
+
+  // discord.js GuildMember -> roles.cache; APIInteractionGuildMember -> roles: string[]
+  const hasRole =
+    Boolean(member?.roles?.cache?.has?.(modRoleId)) ||
+    Boolean(Array.isArray(member?.roles) && member.roles.includes(modRoleId));
+
+  return hasRole ? null : "❌ Mods only.";
+}
+
 class StatusOptions {
   @StringOption({
     name: "bird",
@@ -178,6 +194,11 @@ export class StatusCommand {
     @Context() [interaction]: SlashCommandContext,
     @Options() options: StatusOptions,
   ) {
+    const gate = assertMod(interaction);
+    if (gate) {
+      return interaction.reply({ ephemeral: true, content: gate });
+    }
+
     const birdNameInput = options.bird.trim();
     const regionKey = normalizeRegion(options.region);
     const county = STATUS_COUNTIES[regionKey];

@@ -20,7 +20,6 @@ import {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
-  PermissionsBitField,
   type ButtonInteraction,
   type TextChannel,
   type ThreadChannel,
@@ -37,12 +36,12 @@ function makeId() {
   return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function canManageThread(interaction: any, thread: ThreadChannel): boolean {
-  const member = interaction.member;
-  if (!member) return false;
+function hasModRole(interaction: any): boolean {
+  const modRoleId = process.env.MOD_ID;
+  if (!modRoleId) return false;
 
-  const perms = thread.permissionsFor(member);
-  return Boolean(perms?.has(PermissionsBitField.Flags.ManageThreads));
+  const member = interaction?.member as any;
+  return Boolean(member?.roles?.cache?.has?.(modRoleId));
 }
 
 function validateFutureTimes(startUnix: number, endUnix?: number): string | null {
@@ -716,14 +715,7 @@ public async onHistory(
   @Options() options: MeetupHistoryDto,
 ) {
   const allowedId = process.env.MEETUP_CHANNEL_ID!;
-  const member: any = interaction.member;
-
-  // "Mod" = can manage threads (or admin). Adjust flags if you prefer.
-  const isMod =
-    Boolean(
-      member?.permissions?.has?.(PermissionsBitField.Flags.ManageThreads) ||
-        member?.permissions?.has?.(PermissionsBitField.Flags.Administrator),
-    );
+  const isMod = hasModRole(interaction);
 
   // Non-mods must run this in #meetups
   const gate = assertMeetupHistoryChannel(interaction);
@@ -825,7 +817,8 @@ public async onHistory(
   // Permission helpers
   // =========================
   private async canManageMeetup(interaction: any, thread: ThreadChannel): Promise<boolean> {
-    if (canManageThread(interaction, thread)) return true;
+    // Moderators (MOD_ID role) can manage any meetup.
+    if (hasModRole(interaction)) return true;
 
     const organizerId = await this.getOrganizerIdFromStarterMessage(thread);
     if (!organizerId) return false;
