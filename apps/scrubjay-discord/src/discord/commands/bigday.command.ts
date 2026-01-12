@@ -21,6 +21,25 @@ class BigdaySubmitDto {
   checklist!: string;
 }
 
+class BigdayOpenDto {
+  @StringOption({
+    name: "start",
+    description: "Start date (e.g., 2026-01-12, 1/12/2026, Jan 12 2026)",
+    required: true,
+  })
+  @IsString()
+  start!: string;
+
+  @StringOption({
+    name: "end",
+    description: "End date (e.g., 2026-01-12, 1/12/2026, Jan 12 2026)",
+    required: true,
+  })
+  @IsString()
+  end!: string;
+}
+
+
 
 import { getBigdaySheetId, getSheetsClient } from "@/sheets/sheets.client";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
@@ -29,6 +48,100 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+
+function pad2(n: number) {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+
+function parseUserDateToISODate(input: string): string | null {
+  const raw = (input ?? "").trim();
+  if (!raw) return null;
+
+  const s = raw.toLowerCase();
+
+  // relative shortcuts (LA local date)
+  const today = new Date();
+  if (s === "today" || s === "tod") {
+    return `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+  }
+  if (s === "tomorrow" || s === "tmr" || s === "tomm") {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+  if (s === "yesterday" || s === "yest") {
+    const d = new Date(today);
+    d.setDate(d.getDate() - 1);
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  // YYYY-MM-DD
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) {
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+    return null;
+  }
+
+  // MM/DD[/YYYY] or M-D-YYYY (assume US ordering)
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?$/);
+  if (m) {
+    const mm = Number(m[1]);
+    const dd = Number(m[2]);
+    let yyyy = m[3] ? Number(m[3]) : today.getFullYear();
+    if (m[3] && m[3].length === 2) yyyy = 2000 + yyyy; // 24 -> 2024
+    if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) return `${yyyy}-${pad2(mm)}-${pad2(dd)}`;
+    return null;
+  }
+
+  const months: Record<string, number> = {
+    jan: 1, january: 1,
+    feb: 2, february: 2,
+    mar: 3, march: 3,
+    apr: 4, april: 4,
+    may: 5,
+    jun: 6, june: 6,
+    jul: 7, july: 7,
+    aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10,
+    nov: 11, november: 11,
+    dec: 12, december: 12,
+  };
+
+  // "Jan 12 2026" / "January 12" / "12 Jan 2026"
+  const parts = s.replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  if (parts.length >= 2 && parts.length <= 3) {
+    const a = parts[0];
+    const b = parts[1];
+    const c = parts[2];
+
+    const aMonth = months[a];
+    const bMonth = months[b];
+
+    // Month Day [Year]
+    if (aMonth) {
+      const dd = Number(b);
+      let yyyy = c ? Number(c) : today.getFullYear();
+      if (Number.isFinite(dd) && dd >= 1 && dd <= 31 && yyyy >= 1900 && yyyy <= 3000) {
+        return `${yyyy}-${pad2(aMonth)}-${pad2(dd)}`;
+      }
+    }
+
+    // Day Month [Year]
+    if (bMonth) {
+      const dd = Number(a);
+      let yyyy = c ? Number(c) : today.getFullYear();
+      if (Number.isFinite(dd) && dd >= 1 && dd <= 31 && yyyy >= 1900 && yyyy <= 3000) {
+        return `${yyyy}-${pad2(bMonth)}-${pad2(dd)}`;
+      }
+    }
+  }
+
+  return null;
+}
 function extractChecklistId(input: unknown): string | null {
   if (typeof input !== "string") return null;
   // supports full URL or raw checklist id (S123456789)
@@ -52,7 +165,9 @@ export class BigdayCommand {
     name: "open",
     description: "Open Big Day submissions (mod only)",
   })
-  public async onOpen(@Context() [interaction]: SlashCommandContext) {
+  public async onOpen(@Context() [interaction]: SlashCommandContext,
+    @Options() options: BigdayOpenDto,
+  ) {
     const member = interaction.member;
     const modRoleId = process.env.MOD_ID;
 
@@ -72,7 +187,25 @@ export class BigdayCommand {
       const sheets = getSheetsClient();
       const spreadsheetId = getBigdaySheetId();
 
-      const current = await sheets.spreadsheets.values.get({
+      
+
+      const startIso = parseUserDateToISODate(options?.start);
+      const endIso = parseUserDateToISODate(options?.end);
+
+      if (!startIso || !endIso) {
+        return interaction.reply({
+          ephemeral: true,
+          content:
+            "❌ Invalid date format. Examples: `2026-01-12`, `1/12/2026`, `Jan 12 2026`.",
+        });
+      }
+      if (startIso > endIso) {
+        return interaction.reply({
+          ephemeral: true,
+          content: "❌ Start date must be on or before the end date.",
+        });
+      }
+const current = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range: "Event!A2",
       });
@@ -87,10 +220,10 @@ export class BigdayCommand {
 
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: "Event!A2:C2",
+        range: "Event!A2:E2",
         valueInputOption: "RAW",
         requestBody: {
-          values: [["open", nowIso(), ""]],
+          values: [["open", nowIso(), "", startIso, endIso]],
         },
       });
 
