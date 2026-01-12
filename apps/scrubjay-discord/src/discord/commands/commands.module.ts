@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { HttpModule } from "@nestjs/axios";
+
 import { FiltersModule } from "@/features/filters/filters.module";
 import { SubscriptionsModule } from "@/features/subscriptions/subscriptions.module";
 
@@ -13,7 +15,11 @@ import { MeetupCommands } from "./meetup/meetup.commands";
 import { MeetupBoardService } from "./meetup/meetup.board.service";
 
 @Module({
-  imports: [FiltersModule, SubscriptionsModule],
+  imports: [
+    FiltersModule,
+    SubscriptionsModule,
+    HttpModule, // ✅ needed for HttpService used in EbirdTaxonomyService
+  ],
   providers: [
     UtilCommands,
     SubscriptionCommands,
