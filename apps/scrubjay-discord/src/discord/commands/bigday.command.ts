@@ -406,11 +406,16 @@ export class BigdayCommand {
       }
 
       const data: any = await res.json();
-      const taxa: string[] = (data.obs ?? [])
+      await this.taxonomy.ensureLoaded();
+
+      const taxaAll: string[] = (data.obs ?? [])
         .map((o: any) => o.speciesCode)
         .filter(Boolean);
 
-        await this.taxonomy.ensureLoaded();
+      const taxa = taxaAll.filter((code) => {
+        const t = this.taxonomy.lookupBySpeciesCode(code);
+        return t?.category === "species";
+      });
 
       const observedAt = data.obsDt ?? "";
 

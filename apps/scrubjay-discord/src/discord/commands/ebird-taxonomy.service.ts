@@ -4,6 +4,7 @@ export interface TaxonEntry {
   speciesCode: string;
   comName: string;
   sciName?: string;
+  category?: string; // NEW: eBird taxon category (e.g., "species", "slash", "spuh", "hybrid", etc.)
 }
 
 @Injectable()
@@ -50,6 +51,7 @@ export class EbirdTaxonomyService implements OnModuleInit {
           speciesCode: String(r.speciesCode),
           comName: String(r.comName),
           sciName: r.sciName ? String(r.sciName) : undefined,
+          category: r.category ? String(r.category).toLowerCase().trim() : undefined, // NEW
         };
 
         const key = entry.comName.toLowerCase().trim();
@@ -60,7 +62,7 @@ export class EbirdTaxonomyService implements OnModuleInit {
         this.bySpeciesCode.set(entry.speciesCode, entry);
       }
 
-      this.logger.log(`Loaded eBird taxonomy: ${this.byCommonName.size} species`);
+      this.logger.log(`Loaded eBird taxonomy: ${this.byCommonName.size} taxa`);
     } catch (err: any) {
       this.logger.error(`Failed to load eBird taxonomy: ${err?.message ?? err}`, err?.stack);
     }
@@ -87,12 +89,11 @@ export class EbirdTaxonomyService implements OnModuleInit {
     return this.bySpeciesCode.get(code) ?? null;
   }
 
-private loadPromise: Promise<void> | null = null;
+  private loadPromise: Promise<void> | null = null;
 
-public async ensureLoaded(): Promise<void> {
-  if (this.isLoaded()) return;
-  if (!this.loadPromise) this.loadPromise = this.onModuleInit();
-  await this.loadPromise;
-}
-
+  public async ensureLoaded(): Promise<void> {
+    if (this.isLoaded()) return;
+    if (!this.loadPromise) this.loadPromise = this.onModuleInit();
+    await this.loadPromise;
+  }
 }
