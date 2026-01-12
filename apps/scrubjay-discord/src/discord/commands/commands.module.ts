@@ -7,6 +7,7 @@ import { SubscriptionCommands } from "./subscription-commands.service";
 import { UtilCommands } from "./util-commands.service";
 import { StatusCommand } from "./status.command";
 import { EbirdTaxonomyService } from "./ebird-taxonomy.service";
+import { BigdayCommand } from "./bigday.command";
 
 import { MeetupCommands } from "./meetup/meetup.commands";
 import { MeetupBoardService } from "./meetup/meetup.board.service";
@@ -19,6 +20,7 @@ import { MeetupBoardService } from "./meetup/meetup.board.service";
     PhotoCommands,
     EbirdTaxonomyService,
     StatusCommand,
+    BigdayCommand,
 
     MeetupCommands,
     MeetupBoardService,
