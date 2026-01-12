@@ -224,7 +224,7 @@ export class BigdayCommand {
 
       // fetch checklist from eBird
       const token =
-        process.env.EBIRD_API_TOKEN || process.env.EBIRD_API_KEY;
+        process.env.EBIRD_TOKEN || process.env.EBIRD_TOKEN;
       if (!token) {
         throw new Error("Missing EBIRD API token");
       }
