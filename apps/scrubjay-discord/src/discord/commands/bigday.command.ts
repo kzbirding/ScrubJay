@@ -428,11 +428,11 @@ export class BigdayCommand {
       }
 
       // Columns: taxon_code | species_name | first_seen_by_user_id | first_seen_by_username | first_seen_at | first_checklist_id
-      const lines = rows.map((r) => {
+      const lines = rows.map((r, i) => {
         const name = r[1] ?? r[0] ?? "(unknown)";
         const who = r[3] ?? "(unknown)";
         const when = r[4] ?? "";
-        return `• ${name} — **${who}**${when ? ` (${when})` : ""}`;
+        return `${i + 1}. ${name} — **${who}**${when ? ` (${when})` : ""}`;
       });
 
       // Discord message size safety: chunk into multiple replies
