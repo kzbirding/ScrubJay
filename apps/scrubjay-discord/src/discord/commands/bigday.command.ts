@@ -577,7 +577,6 @@ export class BigdayCommand {
           (openedAt ? `• Opened: ${openedAt}\n` : "") +
           (endedAt ? `• Ended: ${endedAt}\n` : "") +
           `• Total species: **${totalSpecies}**\n` +
-          `• Total distance: **${totalMiles.toFixed(1)} mi**\n` +
           `• Total checklists: **${totalChecklists}**\n` +
           `• Unique participants: **${uniqueParticipants}**`,
       });
