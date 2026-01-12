@@ -217,7 +217,7 @@ export class BigdayCommand {
 
       if (existing.has(checklistId)) {
         return interaction.reply({
-          ephemeral: false,
+          ephemeral: true,
           content: "⚠️ That checklist has already been submitted.",
         });
       }
@@ -248,8 +248,16 @@ export class BigdayCommand {
         await this.taxonomy.ensureLoaded();
 
       const observedAt = data.obsDt ?? "";
+      const kmRaw =
+        data.distanceKm ??
+        data.subAux?.effortDistanceKm ??
+        data.subAux?.distKm;
+
       const distanceKm =
-        typeof data.distanceKm === "number" ? data.distanceKm : "";
+        kmRaw === undefined || kmRaw === null || kmRaw === ""
+          ? ""
+          : Number(kmRaw);
+
 
       const discordUserId = interaction.user.id;
       const discordUsername = interaction.user.username;
@@ -361,23 +369,31 @@ export class BigdayCommand {
       const uniqueParticipants = new Set(subs.map((r) => r[1]).filter(Boolean)).size;
 
       let totalDistanceKm = 0;
+
       for (const r of subs) {
         const v = r[4]; // distance_km column
-        const n = typeof v === "string" ? Number(v) : Number(v);
-        if (Number.isFinite(n)) totalDistanceKm += n;
+        if (v === "" || v == null) continue;
+
+        const n = Number(v);
+        if (!Number.isNaN(n)) {
+          totalDistanceKm += n;
+        }
       }
+
+      const totalMiles = totalDistanceKm * 0.621371;
 
       const totalSpecies = firstSeen.length;
 
+
       return interaction.reply({
-        ephemeral: false,
+        ephemeral: true,
         content:
           `**Big Day Stats**\n` +
           `• Status: **${status}**\n` +
           (openedAt ? `• Opened: ${openedAt}\n` : "") +
           (endedAt ? `• Ended: ${endedAt}\n` : "") +
           `• Total species: **${totalSpecies}**\n` +
-          `• Total distance: **${totalDistanceKm.toFixed(1)} km**\n` +
+          `• Total distance: **${totalMiles.toFixed(1)} mi**\n` +
           `• Total checklists: **${totalChecklists}**\n` +
           `• Unique participants: **${uniqueParticipants}**`,
       });
@@ -406,7 +422,7 @@ export class BigdayCommand {
       const rows = res.data.values ?? [];
       if (!rows.length) {
         return interaction.reply({
-          ephemeral: false,
+          ephemeral: true,
           content: "No species have been recorded yet.",
         });
       }
@@ -432,9 +448,9 @@ export class BigdayCommand {
       if (cur.trim()) chunks.push(cur);
 
       // first message normal reply, rest follow-ups
-      await interaction.reply({ ephemeral: false, content: chunks[0] });
+      await interaction.reply({ ephemeral: true, content: chunks[0] });
       for (let i = 1; i < chunks.length; i++) {
-        await interaction.followUp({ ephemeral: false, content: chunks[i] });
+        await interaction.followUp({ ephemeral: true, content: chunks[i] });
       }
     } catch (err: any) {
       return interaction.reply({
@@ -494,7 +510,7 @@ public async onErase(@Context() [interaction]: SlashCommandContext) {
     ]);
 
     return interaction.reply({
-      ephemeral: false,
+      ephemeral: true,
       content: "🧹 **Big Day data erased.** Ready for a fresh start.",
     });
   } catch (err: any) {
