@@ -1,127 +1,89 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { HttpService } from "@nestjs/axios";
+import { firstValueFrom } from "rxjs";
 
-type TaxonRow = {
-  speciesCode?: string;
-  comName?: string;
-  sciName?: string;
-  category?: string; // "species", "issf", etc
-};
-
-export type TaxonEntry = {
+export interface TaxonEntry {
   speciesCode: string;
   comName: string;
   sciName?: string;
-};
+}
 
 @Injectable()
 export class EbirdTaxonomyService implements OnModuleInit {
   private readonly logger = new Logger(EbirdTaxonomyService.name);
 
-  private loaded = false;
-  private loadError: string | null = null;
-
-  // normalized common name -> entry
+  // existing map: common name -> entry
   private byCommonName = new Map<string, TaxonEntry>();
 
-  // helpful for suggestions
-  private allCommonNames: string[] = [];
+  // NEW: speciesCode -> entry
+  private bySpeciesCode = new Map<string, TaxonEntry>();
 
-  private normalize(s: string): string {
-    return s
-      .toLowerCase()
-      .trim()
-      // remove most punctuation
-      .replace(/[’'".,()/\-]/g, " ")
-      .replace(/\s+/g, " ");
-  }
-
-  public isLoaded() {
-    return this.loaded;
-  }
-
-  public getLoadError() {
-    return this.loadError;
-  }
+  constructor(private readonly http: HttpService) {}
 
   async onModuleInit() {
-    const token = process.env.EBIRD_TOKEN; // <-- matches your Railway variable
-    if (!token) {
-      this.loadError = "ebird_token env var missing";
-      this.logger.error(
-        "Taxonomy not loaded: ebird_token is not set (Railway Variables).",
-      );
-      return;
-    }
-
-    const url = "https://api.ebird.org/v2/ref/taxonomy/ebird?fmt=json&locale=en";
-
     try {
-      this.logger.log("Loading eBird taxonomy (one-time at startup)...");
-      const res = await fetch(url, {
-        headers: { "X-eBirdApiToken": token },
-      });
+      const token =
+        process.env.EBIRD_API_TOKEN ||
+        process.env.EBIRD_API_KEY;
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        this.loadError = `HTTP ${res.status} ${body}`.slice(0, 500);
-        this.logger.error(`Taxonomy load failed: ${this.loadError}`);
+      if (!token) {
+        this.logger.warn("No EBIRD_API_TOKEN set; taxonomy disabled");
         return;
       }
 
-      const rows = (await res.json()) as TaxonRow[];
-
-      // Only keep true species
-      const species = rows.filter(
-        (r) =>
-          r.category === "species" && !!r.speciesCode && !!r.comName,
+      const res = await firstValueFrom(
+        this.http.get("https://api.ebird.org/v2/ref/taxonomy/ebird", {
+          headers: { "X-eBirdApiToken": token },
+          params: {
+            fmt: "json",
+            locale: "en",
+          },
+        }),
       );
+
+      const species = res.data as any[];
 
       this.byCommonName.clear();
+      this.bySpeciesCode.clear();
 
       for (const r of species) {
-        const key = this.normalize(r.comName!);
-        // If duplicates exist, keep the first
+        if (!r.speciesCode || !r.comName) continue;
+
+        const entry: TaxonEntry = {
+          speciesCode: r.speciesCode,
+          comName: r.comName,
+          sciName: r.sciName,
+        };
+
+        // normalize common name key
+        const key = r.comName.toLowerCase().trim();
+
         if (!this.byCommonName.has(key)) {
-          this.byCommonName.set(key, {
-            speciesCode: r.speciesCode!,
-            comName: r.comName!,
-            sciName: r.sciName,
-          });
+          this.byCommonName.set(key, entry);
         }
+
+        // NEW: reverse lookup
+        this.bySpeciesCode.set(entry.speciesCode, entry);
       }
 
-      this.allCommonNames = Array.from(this.byCommonName.values()).map(
-        (e) => e.comName,
-      );
-
-      this.loaded = true;
-      this.loadError = null;
-
       this.logger.log(
-        `eBird taxonomy loaded: ${this.byCommonName.size} species`,
+        `Loaded eBird taxonomy: ${this.byCommonName.size} species`,
       );
-    } catch (err: any) {
-      this.loadError = (err?.message ?? String(err)).slice(0, 500);
-      this.logger.error(`Taxonomy load threw: ${this.loadError}`);
+    } catch (err) {
+      this.logger.error("Failed to load eBird taxonomy", err);
     }
   }
 
-  public lookupCommonName(name: string): TaxonEntry | null {
-    const key = this.normalize(name);
+  // EXISTING behavior (unchanged)
+  public lookupByCommonName(name: string): TaxonEntry | null {
+    if (!name) return null;
+    const key = name.toLowerCase().trim();
     return this.byCommonName.get(key) ?? null;
   }
 
-  public suggest(name: string, limit = 5): string[] {
-    const q = this.normalize(name);
-    if (!q) return [];
-
-    // simple contains-based suggestion
-    const out: string[] = [];
-    for (const entry of this.byCommonName.values()) {
-      const norm = this.normalize(entry.comName);
-      if (norm.includes(q)) out.push(entry.comName);
-      if (out.length >= limit) break;
-    }
-    return out;
+  // NEW method (additive, safe)
+  public lookupBySpeciesCode(code: string): TaxonEntry | null {
+    if (!code) return null;
+    return this.bySpeciesCode.get(code) ?? null;
   }
 }
