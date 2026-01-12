@@ -86,4 +86,15 @@ export class EbirdTaxonomyService implements OnModuleInit {
     if (!code) return null;
     return this.bySpeciesCode.get(code) ?? null;
   }
+
+  // Backwards-compatible: status.command.ts expects this
+public isLoaded(): boolean {
+  return this.byCommonName.size > 0;
+}
+
+// Backwards-compatible alias: status.command.ts calls lookupCommonName()
+public lookupCommonName(name: string): TaxonEntry | null {
+  return this.lookupByCommonName(name);
+}
+
 }
