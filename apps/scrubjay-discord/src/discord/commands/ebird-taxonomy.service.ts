@@ -18,7 +18,7 @@ export class EbirdTaxonomyService implements OnModuleInit {
 
   async onModuleInit() {
     try {
-      const token = process.env.EBIRD_API_TOKEN || process.env.EBIRD_API_KEY;
+      const token = process.env.EBIRD_TOKEN || process.env.EBIRD_TOKEN;
       if (!token) {
         this.logger.warn("No EBIRD_API_TOKEN set; taxonomy disabled");
         return;
