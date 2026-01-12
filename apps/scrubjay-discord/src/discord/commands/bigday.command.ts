@@ -444,4 +444,65 @@ export class BigdayCommand {
     }
   }
 
+  @Subcommand({
+  name: "erase",
+  description: "Erase all Big Day data (mods only)",
+})
+public async onErase(@Context() [interaction]: SlashCommandContext) {
+  const member = interaction.member;
+  const modRoleId = process.env.MOD_ID;
+
+  if (
+    !modRoleId ||
+    !member ||
+    !("roles" in member) ||
+    !("cache" in member.roles) ||
+    !member.roles.cache.has(modRoleId)
+  ) {
+    return interaction.reply({
+      ephemeral: true,
+      content: "❌ You do not have permission to erase Big Day data.",
+    });
+  }
+
+  try {
+    const sheets = getSheetsClient();
+    const spreadsheetId = getBigdaySheetId();
+
+    // Clear data rows (keep headers)
+    await Promise.all([
+      sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: "Species!A2:Z",
+      }),
+      sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: "FirstSeen!A2:Z",
+      }),
+      sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: "Submissions!A2:Z",
+      }),
+      sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: "Event!A2:C2",
+        valueInputOption: "RAW",
+        requestBody: {
+          values: [["closed", "", ""]],
+        },
+      }),
+    ]);
+
+    return interaction.reply({
+      ephemeral: false,
+      content: "🧹 **Big Day data erased.** Ready for a fresh start.",
+    });
+  } catch (err: any) {
+    return interaction.reply({
+      ephemeral: true,
+      content: `❌ Failed to erase Big Day data: ${err?.message ?? "unknown error"}`,
+    });
+  }
+}
+
 }

@@ -191,6 +191,10 @@ export class StatusCommand {
       return;
     }
 
+    // Ensure taxonomy has finished loading (prevents 'data not ready' race)
+    await this.taxonomy.ensureLoaded();
+
+
     const token = process.env.EBIRD_TOKEN;
     if (!token || !this.taxonomy.isLoaded()) {
       await interaction.reply({
