@@ -313,4 +313,115 @@ export class BigdayCommand {
       });
     }
   }
+
+    @Subcommand({
+    name: "stats",
+    description: "Show Big Day totals",
+  })
+  public async onStats(@Context() [interaction]: SlashCommandContext) {
+    try {
+      const sheets = getSheetsClient();
+      const spreadsheetId = getBigdaySheetId();
+
+      const [eventRes, subsRes, firstRes] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId, range: "Event!A2:C2" }),
+        sheets.spreadsheets.values.get({ spreadsheetId, range: "Submissions!A2:F" }),
+        sheets.spreadsheets.values.get({ spreadsheetId, range: "FirstSeen!A2:F" }),
+      ]);
+
+      const eventRow = eventRes.data.values?.[0] ?? [];
+      const status = eventRow[0] ?? "closed";
+      const openedAt = eventRow[1] ?? "";
+      const endedAt = eventRow[2] ?? "";
+
+      const subs = subsRes.data.values ?? [];
+      const firstSeen = firstRes.data.values ?? [];
+
+      const totalChecklists = subs.length;
+      const uniqueParticipants = new Set(subs.map((r) => r[1]).filter(Boolean)).size;
+
+      let totalDistanceKm = 0;
+      for (const r of subs) {
+        const v = r[4]; // distance_km column
+        const n = typeof v === "string" ? Number(v) : Number(v);
+        if (Number.isFinite(n)) totalDistanceKm += n;
+      }
+
+      const totalSpecies = firstSeen.length;
+
+      return interaction.reply({
+        ephemeral: false,
+        content:
+          `**Big Day Stats**\n` +
+          `• Status: **${status}**\n` +
+          (openedAt ? `• Opened: ${openedAt}\n` : "") +
+          (endedAt ? `• Ended: ${endedAt}\n` : "") +
+          `• Total species: **${totalSpecies}**\n` +
+          `• Total distance: **${totalDistanceKm.toFixed(1)} km**\n` +
+          `• Total checklists: **${totalChecklists}**\n` +
+          `• Unique participants: **${uniqueParticipants}**`,
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        ephemeral: true,
+        content: `❌ Failed to load stats: ${err?.message ?? "unknown error"}`,
+      });
+    }
+  }
+
+    @Subcommand({
+    name: "species",
+    description: "List all species and who got them first",
+  })
+  public async onSpecies(@Context() [interaction]: SlashCommandContext) {
+    try {
+      const sheets = getSheetsClient();
+      const spreadsheetId = getBigdaySheetId();
+
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "FirstSeen!A2:F",
+      });
+
+      const rows = res.data.values ?? [];
+      if (!rows.length) {
+        return interaction.reply({
+          ephemeral: false,
+          content: "No species have been recorded yet.",
+        });
+      }
+
+      // Columns: taxon_code | species_name | first_seen_by_user_id | first_seen_by_username | first_seen_at | first_checklist_id
+      const lines = rows.map((r) => {
+        const name = r[1] ?? r[0] ?? "(unknown)";
+        const who = r[3] ?? "(unknown)";
+        const when = r[4] ?? "";
+        return `• ${name} — **${who}**${when ? ` (${when})` : ""}`;
+      });
+
+      // Discord message size safety: chunk into multiple replies
+      const chunks: string[] = [];
+      let cur = "**Big Day Species (first seen)**\n";
+      for (const line of lines) {
+        if ((cur + line + "\n").length > 1800) {
+          chunks.push(cur);
+          cur = "";
+        }
+        cur += line + "\n";
+      }
+      if (cur.trim()) chunks.push(cur);
+
+      // first message normal reply, rest follow-ups
+      await interaction.reply({ ephemeral: false, content: chunks[0] });
+      for (let i = 1; i < chunks.length; i++) {
+        await interaction.followUp({ ephemeral: false, content: chunks[i] });
+      }
+    } catch (err: any) {
+      return interaction.reply({
+        ephemeral: true,
+        content: `❌ Failed to load species: ${err?.message ?? "unknown error"}`,
+      });
+    }
+  }
+
 }
