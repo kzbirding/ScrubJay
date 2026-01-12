@@ -86,4 +86,13 @@ export class EbirdTaxonomyService implements OnModuleInit {
     if (!code) return null;
     return this.bySpeciesCode.get(code) ?? null;
   }
+
+private loadPromise: Promise<void> | null = null;
+
+public async ensureLoaded(): Promise<void> {
+  if (this.isLoaded()) return;
+  if (!this.loadPromise) this.loadPromise = this.onModuleInit();
+  await this.loadPromise;
+}
+
 }

@@ -245,6 +245,8 @@ export class BigdayCommand {
         .map((o: any) => o.speciesCode)
         .filter(Boolean);
 
+        await this.taxonomy.ensureLoaded();
+
       const observedAt = data.obsDt ?? "";
       const distanceKm =
         typeof data.distanceKm === "number" ? data.distanceKm : "";
