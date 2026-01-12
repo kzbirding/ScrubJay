@@ -29,7 +29,7 @@ function mustGetEnv(name: string): string {
 }
 
 function getEbirdToken(): string {
-  return process.env.EBIRD_API_TOKEN ?? process.env.EBIRD_API_KEY ?? "";
+  return process.env.EBIRD_TOKEN ?? process.env.EBIRD_TOKEN ?? "";
 }
 
 function hasRole(member: any, roleId: string): boolean {
