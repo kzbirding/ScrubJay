@@ -15,8 +15,8 @@ import { MeetupCommands } from "./meetup/meetup.commands";
 import { MeetupBoardService } from "./meetup/meetup.board.service";
 
 // ✅ NEW: Quiz
-import { QuizCommand } from "./quiz/quiz.command";
-import { QuizService } from "./quiz/quiz.service";
+import { QCommand } from "./q/q.command";
+import { QuizService } from "./q/q.service";
 
 @Module({
   imports: [
@@ -37,7 +37,7 @@ import { QuizService } from "./quiz/quiz.service";
 
     // ✅ NEW: Quiz
     QuizService,
-    QuizCommand,
+    QCommand,
   ],
 })
 export class CommandsModule {}
