@@ -52,10 +52,10 @@ class QDto {
       { name: "easy (buttons)", value: "easy" },
       { name: "normal (free response)", value: "normal" },
       { name: "photo (another photo)", value: "photo" },
-      { name: "hint (first letter)", value: "hint" },
-      { name: "skip (reveal + new)", value: "skip" },
-      { name: "end (reveal + stop)", value: "end" },
-      { name: "help", value: "help" },
+      { name: "hint", value: "hint" },
+      { name: "skip", value: "skip" },
+      { name: "end", value: "end" },
+      { name: "help (command list)", value: "help" },
     ],
   })
   action?: QAction;
@@ -90,13 +90,13 @@ export class QCommand {
         ephemeral: true,
         content:
           "**/q** → new quiz\n" +
-          "**/q action:easy** → buttons mode\n" +
-          "**/q action:normal** → free response mode\n" +
-          "**/qa guess:<species>** → answer\n" +
-          "**/q action:photo** → another photo\n" +
-          "**/q action:hint** → first letter (normal only)\n" +
-          "**/q action:skip** → reveal + new\n" +
-          "**/q action:end** → reveal + stop",
+          "**/q easy** → buttons mode\n" +
+          "**/q normal** → free response mode\n" +
+          "**/qa <species>** → answer\n" +
+          "**/q photo** → another photo\n" +
+          "**/q hint** → first letter (normal only)\n" +
+          "**/q skip** → reveal + new\n" +
+          "**/q end** → reveal + stop",
       });
     }
 
@@ -138,7 +138,7 @@ export class QCommand {
       }
       await interaction.reply({
         ephemeral: true,
-        content: `📸 Getting another photo of **${st.correctName}**...`,
+        content: `📸 Getting another photo...`,
       });
       return this.sendAnotherPhoto(interaction, userId, st);
     }
