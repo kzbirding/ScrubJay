@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { EbirdTaxonomyService, type TaxonEntry } from "../ebird-taxonomy.service";
-import { SOCAL_COMMON_NAMES } from "../quiz/socal.names";
+import { SOCAL_COMMON_NAMES } from "../q/socal.names";
 
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
