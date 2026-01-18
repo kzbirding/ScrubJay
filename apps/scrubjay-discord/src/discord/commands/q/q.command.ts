@@ -298,7 +298,54 @@ export class QCommand {
       return bi.followUp({ ephemeral: true, content: "❌ Not quite." });
     }
 
-    ACTIVE_QUIZ.delete(lockedUserId);
-    return bi.followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` });
+// correct
+ACTIVE_QUIZ.delete(lockedUserId);
+
+// confirm correct (ephemeral)
+await bi
+  .followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` })
+  .catch(() => null);
+
+// auto-next: send a new quiz with a new photo + buttons
+const ch: any = bi.channel;
+if (!ch || typeof ch.send !== "function") return;
+
+const q = await this.quiz.buildQuiz().catch(() => null);
+if (!q) {
+  await ch
+    .send("⚠️ I couldn’t generate a new quiz image right now. Try **/q** again.")
+    .catch(() => null);
+  return;
+}
+
+const embed = new EmbedBuilder()
+  .setTitle("Bird Quiz")
+  .setDescription("Which species is this? (buttons)")
+  .setImage(q.imageUrl)
+  .setFooter({ text: `Asset: ML${q.assetId}` });
+
+const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+  q.choices.map((c) =>
+    new ButtonBuilder()
+      .setCustomId(`q_pick:${lockedUserId}:${c.code}`)
+      .setLabel(c.name)
+      .setStyle(ButtonStyle.Secondary),
+  ),
+);
+
+const msg = await ch.send({ embeds: [embed], components: [row] }).catch(() => null);
+if (!msg) return;
+
+ACTIVE_QUIZ.set(lockedUserId, {
+  channelId: ch.id,
+  messageId: msg.id,
+  easyMessageId: msg.id,
+  correctCode: q.correctCode,
+  correctName: q.correctName,
+  correctSlug: slugify(q.correctName),
+});
+
+return;
+
   }
 }
