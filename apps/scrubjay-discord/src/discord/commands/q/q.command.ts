@@ -118,13 +118,13 @@ export class QCommand {
         ephemeral: true,
         content:
           "**/q** → new quiz image\n" +
-          "**/q action:easy** → buttons mode (saved for you)\n" +
-          "**/q action:normal** → free-response mode (saved for you)\n" +
-          "**/qa guess:<species>** → answer your current quiz (fuzzy)\n" +
-          "**/q action:photo** → another photo of the current species\n" +
-          "**/q action:hint** → first letter hint\n" +
-          "**/q action:skip** → reveal answer + new image\n" +
-          "**/q action:end** → reveal answer + stop\n",
+          "**/q easy** → buttons mode (saved for you)\n" +
+          "**/q normal** → free-response mode (saved for you)\n" +
+          "**/qa <species>** → answer your current quiz\n" +
+          "**/q photo** → another photo of the current species\n" +
+          "**/q hint** → first letter hint\n" +
+          "**/q skip** → skip current question\n" +
+          "**/q end** → stop quiz\n",
       });
     }
 
@@ -139,32 +139,28 @@ export class QCommand {
       });
     }
 
-    if (action === "hint") {
-      const st = ACTIVE_QUIZ.get(userId);
-      if (!st || st.channelId !== channelId) {
-        return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q** first." });
-      }
-      const first = st.correctName?.trim()?.[0] ?? "?";
-      return interaction.reply({
-        ephemeral: true,
-        content: `💡 Hint: starts with **${first.toUpperCase()}**`,
-      });
-    }
+if (action === "hint") {
+  const st = ACTIVE_QUIZ.get(userId);
+  if (!st || st.channelId !== channelId) {
+    return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q** first." });
+  }
 
-    if (action === "photo") {
-      const st = ACTIVE_QUIZ.get(userId);
-      if (!st || st.channelId !== channelId) {
-        return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q** first." });
-      }
+  // ✅ Only allow hint in normal mode
+  // If the current quiz has buttons, it's easy-mode
+  if (st.easyMessageId) {
+    return interaction.reply({
+      ephemeral: true,
+      content: "Hint is only available in **normal mode**. Use **/q action:normal** for your next question.",
+    });
+  }
 
-      // Confirmation + then a new photo of same species
-      await interaction.reply({
-        ephemeral: true,
-        content: `📸 Grabbing another photo for **${st.correctName}**...`,
-      });
+  const first = st.correctName?.trim()?.[0] ?? "?";
+  return interaction.reply({
+    ephemeral: true,
+    content: `💡 Hint: starts with **${first.toUpperCase()}**`,
+  });
+}
 
-      return this.sendAnotherPhotoSameSpecies(interaction, userId, st);
-    }
 
     if (action === "skip" || action === "end") {
       const st = ACTIVE_QUIZ.get(userId);
@@ -250,7 +246,7 @@ export class QCommand {
   }
 
   private async sendQuiz(interaction: any, userId: string, channelId: string) {
-    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "easy";
+    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
 
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
