@@ -8,7 +8,7 @@ import {
   type Message,
 } from "discord.js";
 import { Context, On, Options, SlashCommand, type SlashCommandContext } from "necord";
-import { QuizService } from "./quiz/quiz.service";
+import { QuizService } from "../q/q.service";
 
 // ---- per-user difficulty (resets on restart) ----
 type Difficulty = "easy" | "normal";
@@ -278,8 +278,11 @@ export class QCommand {
       .setImage(q.imageUrl)
       .setFooter({ text: `Asset: ML${q.assetId}` });
 
-    const sent = await msg.channel.send({ embeds: [embed] }).catch(() => null);
-    if (!sent) return;
+      const ch: any = msg.channel;
+      if (!ch || typeof ch.send !== "function") return;
+
+      const sent = await ch.send({ embeds: [embed] }).catch(() => null);
+
 
     ACTIVE_QUIZ.set(userId, {
       channelId: msg.channelId,
