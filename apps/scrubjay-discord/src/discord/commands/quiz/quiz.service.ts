@@ -28,66 +28,99 @@ export class QuizService {
     return e;
   }
 
-  private extractAssetId(html: string): string | null {
-    // Macaulay assets can show up as:
-    // - /asset/46340351
-    // - ML46340351
-    // - "assetId":46340351
-    // - assetId=ML46340351
-    const patterns: RegExp[] = [
-      /\/asset\/(\d{6,})\b/i,
-      /\bML(\d{6,})\b/i,
-      /"assetId"\s*:\s*"?(\d{6,})"?/i,
-      /assetId=ML(\d{6,})/i,
-      /assetId=(\d{6,})/i,
-    ];
+  private extractAssetIdsFromHtml(html: string): string[] {
+    // media.ebird.org catalog pages include real photo URLs like:
+    // https://cdn.download.ams.birds.cornell.edu/api/v1/asset/320005481/1800
+    // We extract all numeric asset IDs.
+    const ids: string[] = [];
+    const re = /https:\/\/cdn\.download\.ams\.birds\.cornell\.edu\/api\/v1\/asset\/(\d{6,})(?:\/\d+)?/gi;
 
-    for (const re of patterns) {
-      const m = html.match(re);
-      if (m?.[1]) return m[1];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      if (m[1]) ids.push(m[1]);
     }
-    return null;
+
+    // Deduplicate
+    return [...new Set(ids)];
   }
 
-  private async getMacaulayImageUrl(
-    taxonCode: string,
-  ): Promise<{ assetId: string; imageUrl: string }> {
-    const urls = [
-      `https://search.macaulaylibrary.org/catalog?taxonCode=${encodeURIComponent(
-        taxonCode,
-      )}&mediaType=photo&sort=rating_rank_desc&view=list`,
-      `https://media.ebird.org/catalog?taxonCode=${encodeURIComponent(
-        taxonCode,
-      )}&mediaType=photo&sort=rating_rank_desc&view=list`,
-    ];
+  private async fetchCatalogPage(taxonCode: string, page: number): Promise<string> {
+    const url = new URL("https://media.ebird.org/catalog");
+    url.searchParams.set("taxonCode", taxonCode);
+    url.searchParams.set("mediaType", "photo");
+    // Sorting helps avoid empty/weird pages for some taxa
+    url.searchParams.set("sort", "rating_rank_desc");
+    url.searchParams.set("page", String(page));
 
-    let lastStatus: number | null = null;
+    const res = await fetch(url.toString(), {
+      headers: {
+        Accept: "text/html",
+        "User-Agent": "Mozilla/5.0 (compatible; ScrubJayBot/1.0)",
+      },
+    });
 
-    for (const url of urls) {
-      const res = await fetch(url, {
-        headers: {
-          Accept: "text/html",
-          // helps some CDNs treat this like a normal browser request
-          "User-Agent": "Mozilla/5.0 (compatible; ScrubJayBot/1.0)",
-        },
-      });
-
-      lastStatus = res.status;
-
-      if (!res.ok) continue;
-
-      const html = await res.text();
-      const assetId = this.extractAssetId(html);
-      if (!assetId) continue;
-
-      // Cornell CDN image endpoint (works with numeric assetId)
-      const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
-      return { assetId, imageUrl };
+    if (!res.ok) {
+      throw new Error(`eBird media catalog fetch failed: ${res.status}`);
     }
 
-    throw new Error(
-      `No Macaulay asset id found (taxonCode=${taxonCode}, lastStatus=${lastStatus ?? "n/a"})`,
-    );
+    return res.text();
+  }
+
+  private async getRandomMacaulayPhotoFromEbirdCatalog(
+    taxonCode: string,
+  ): Promise<{ assetId: string; imageUrl: string }> {
+    // We don’t have an official “total pages” API here, so we do a practical approach:
+    // - try a handful of random pages in a reasonable range
+    // - extract all real photo asset IDs from the HTML
+    // - pick one at random
+    //
+    // This yields good randomness without scraping the Macaulay JS search app.
+
+    const MAX_PAGE_GUESS = 12; // increase later if you want more variety
+    const ATTEMPTS = 8;
+
+    let lastErr: unknown = null;
+
+    for (let i = 0; i < ATTEMPTS; i++) {
+      // Random page 1..MAX_PAGE_GUESS
+      const page = 1 + Math.floor(Math.random() * MAX_PAGE_GUESS);
+
+      try {
+        const html = await this.fetchCatalogPage(taxonCode, page);
+        const ids = this.extractAssetIdsFromHtml(html);
+
+        if (ids.length === 0) {
+          // try another page
+          continue;
+        }
+
+        const assetId = pickRandom(ids);
+
+        // Discord-friendly size
+        const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
+        return { assetId, imageUrl };
+      } catch (e) {
+        lastErr = e;
+        continue;
+      }
+    }
+
+    // As a last-ditch fallback, try page 1 once (usually has something)
+    try {
+      const html = await this.fetchCatalogPage(taxonCode, 1);
+      const ids = this.extractAssetIdsFromHtml(html);
+      if (ids.length > 0) {
+        const assetId = pickRandom(ids);
+        const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
+        return { assetId, imageUrl };
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
   }
 
   public async buildQuiz(): Promise<{
@@ -99,7 +132,7 @@ export class QuizService {
   }> {
     await this.taxonomy.ensureLoaded();
 
-    // We may need to try multiple birds until we find one whose Macaulay HTML yields an asset id.
+    // We may need to try multiple birds until we find one that yields photos
     let lastErr: unknown = null;
 
     for (let attempt = 0; attempt < 12; attempt++) {
@@ -119,8 +152,8 @@ export class QuizService {
       const correctName = correctEntry.comName;
 
       try {
-        // 2) fetch Macaulay photo
-        const { assetId, imageUrl } = await this.getMacaulayImageUrl(correctCode);
+        // 2) fetch a random photo from eBird media catalog (Macaulay-backed)
+        const { assetId, imageUrl } = await this.getRandomMacaulayPhotoFromEbirdCatalog(correctCode);
 
         // 3) build distractors
         const distractors: TaxonEntry[] = [];
@@ -159,7 +192,6 @@ export class QuizService {
           assetId,
         };
       } catch (e) {
-        // Try a different bird instead of crashing the whole command
         lastErr = e;
         continue;
       }
