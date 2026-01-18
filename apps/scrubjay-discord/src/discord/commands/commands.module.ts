@@ -14,6 +14,10 @@ import { BigdayCommand } from "./bigday.command";
 import { MeetupCommands } from "./meetup/meetup.commands";
 import { MeetupBoardService } from "./meetup/meetup.board.service";
 
+// ✅ NEW: Quiz
+import { QuizCommand } from "./quiz/quiz.command";
+import { QuizService } from "./quiz/quiz.service";
+
 @Module({
   imports: [
     FiltersModule,
@@ -30,6 +34,10 @@ import { MeetupBoardService } from "./meetup/meetup.board.service";
 
     MeetupCommands,
     MeetupBoardService,
+
+    // ✅ NEW: Quiz
+    QuizService,
+    QuizCommand,
   ],
 })
 export class CommandsModule {}
