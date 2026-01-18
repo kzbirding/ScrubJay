@@ -21,36 +21,53 @@ export class QuizService {
   private resolveCommonName(name: string): TaxonEntry | null {
     const e = this.taxonomy.lookupByCommonNameFuzzy(name);
     if (!e) return null;
-
-    // keep quiz clean: only real species
-    if (e.category && e.category !== "species") return null;
-
+    if (e.category && e.category !== "species") return null; // keep quiz clean
     return e;
   }
 
   private extractAssetIdsFromHtml(html: string): string[] {
-    // media.ebird.org catalog pages include real photo URLs like:
-    // https://cdn.download.ams.birds.cornell.edu/api/v1/asset/320005481/1800
-    // We extract all numeric asset IDs.
-    const ids: string[] = [];
-    const re = /https:\/\/cdn\.download\.ams\.birds\.cornell\.edu\/api\/v1\/asset\/(\d{6,})(?:\/\d+)?/gi;
+    const ids = new Set<string>();
 
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(html)) !== null) {
-      if (m[1]) ids.push(m[1]);
+    // 1) If the page includes direct Cornell CDN asset URLs
+    {
+      const re =
+        /https:\/\/cdn\.download\.ams\.birds\.cornell\.edu\/api\/v1\/asset\/(\d{6,})(?:\/\d+)?/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(html)) !== null) {
+        if (m[1]) ids.add(m[1]);
+      }
     }
 
-    // Deduplicate
-    return [...new Set(ids)];
+    // 2) eBird media catalog HTML often includes “ML#########” in link text (works even when CDN URLs are absent) :contentReference[oaicite:1]{index=1}
+    {
+      const re = /\bML(\d{6,})\b/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(html)) !== null) {
+        if (m[1]) ids.add(m[1]);
+      }
+    }
+
+    // 3) Sometimes there are direct Macaulay asset links
+    {
+      const re = /macaulaylibrary\.org\/asset\/(\d{6,})\b/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(html)) !== null) {
+        if (m[1]) ids.add(m[1]);
+      }
+    }
+
+    return [...ids];
   }
 
   private async fetchCatalogPage(taxonCode: string, page: number): Promise<string> {
     const url = new URL("https://media.ebird.org/catalog");
     url.searchParams.set("taxonCode", taxonCode);
     url.searchParams.set("mediaType", "photo");
-    // Sorting helps avoid empty/weird pages for some taxa
     url.searchParams.set("sort", "rating_rank_desc");
     url.searchParams.set("page", String(page));
+    // These help keep the result “bird photos only”, like the UI toggle.
+    url.searchParams.set("birdOnly", "true");
+    url.searchParams.set("view", "grid");
 
     const res = await fetch(url.toString(), {
       headers: {
@@ -59,54 +76,31 @@ export class QuizService {
       },
     });
 
-    if (!res.ok) {
-      throw new Error(`eBird media catalog fetch failed: ${res.status}`);
-    }
-
+    if (!res.ok) throw new Error(`eBird media catalog fetch failed: ${res.status}`);
     return res.text();
   }
 
   private async getRandomMacaulayPhotoFromEbirdCatalog(
     taxonCode: string,
   ): Promise<{ assetId: string; imageUrl: string }> {
-    // We don’t have an official “total pages” API here, so we do a practical approach:
-    // - try a handful of random pages in a reasonable range
-    // - extract all real photo asset IDs from the HTML
-    // - pick one at random
-    //
-    // This yields good randomness without scraping the Macaulay JS search app.
+    const MAX_PAGE_GUESS = 15;
+    const ATTEMPTS = 10;
 
-    const MAX_PAGE_GUESS = 12; // increase later if you want more variety
-    const ATTEMPTS = 8;
-
-    let lastErr: unknown = null;
-
+    // Try multiple random pages to get variety.
     for (let i = 0; i < ATTEMPTS; i++) {
-      // Random page 1..MAX_PAGE_GUESS
       const page = 1 + Math.floor(Math.random() * MAX_PAGE_GUESS);
+      const html = await this.fetchCatalogPage(taxonCode, page);
+      const ids = this.extractAssetIdsFromHtml(html);
 
-      try {
-        const html = await this.fetchCatalogPage(taxonCode, page);
-        const ids = this.extractAssetIdsFromHtml(html);
+      if (ids.length === 0) continue;
 
-        if (ids.length === 0) {
-          // try another page
-          continue;
-        }
-
-        const assetId = pickRandom(ids);
-
-        // Discord-friendly size
-        const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
-        return { assetId, imageUrl };
-      } catch (e) {
-        lastErr = e;
-        continue;
-      }
+      const assetId = pickRandom(ids);
+      const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
+      return { assetId, imageUrl };
     }
 
-    // As a last-ditch fallback, try page 1 once (usually has something)
-    try {
+    // Fallback: page 1
+    {
       const html = await this.fetchCatalogPage(taxonCode, 1);
       const ids = this.extractAssetIdsFromHtml(html);
       if (ids.length > 0) {
@@ -114,48 +108,40 @@ export class QuizService {
         const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
         return { assetId, imageUrl };
       }
-    } catch (e) {
-      lastErr = e;
     }
 
-    throw lastErr instanceof Error
-      ? lastErr
-      : new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
+    throw new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
   }
 
   public async buildQuiz(): Promise<{
-    correctCode: string; // speciesCode
-    correctName: string; // common name
-    choices: { code: string; name: string }[]; // code = speciesCode, name = common name
+    correctCode: string;
+    correctName: string;
+    choices: { code: string; name: string }[];
     imageUrl: string;
     assetId: string;
   }> {
     await this.taxonomy.ensureLoaded();
 
-    // We may need to try multiple birds until we find one that yields photos
     let lastErr: unknown = null;
 
-    for (let attempt = 0; attempt < 12; attempt++) {
-      // 1) pick a correct bird from your common-name list
+    // Try multiple birds until one has photos we can extract.
+    for (let attempt = 0; attempt < 18; attempt++) {
       let correctEntry: TaxonEntry | null = null;
-      for (let i = 0; i < 25 && !correctEntry; i++) {
-        const candidateName = pickRandom(SOCAL_COMMON_NAMES);
-        correctEntry = this.resolveCommonName(candidateName);
+
+      for (let i = 0; i < 30 && !correctEntry; i++) {
+        correctEntry = this.resolveCommonName(pickRandom(SOCAL_COMMON_NAMES));
       }
       if (!correctEntry) {
-        throw new Error(
-          "Could not resolve any SoCal common names to eBird species (check SOCAL_COMMON_NAMES)",
-        );
+        throw new Error("Could not resolve any SoCal common names to eBird species (check SOCAL_COMMON_NAMES)");
       }
 
       const correctCode = correctEntry.speciesCode;
       const correctName = correctEntry.comName;
 
       try {
-        // 2) fetch a random photo from eBird media catalog (Macaulay-backed)
         const { assetId, imageUrl } = await this.getRandomMacaulayPhotoFromEbirdCatalog(correctCode);
 
-        // 3) build distractors
+        // Build 3 distractors
         const distractors: TaxonEntry[] = [];
         const seenCodes = new Set<string>([correctCode]);
 
@@ -181,16 +167,12 @@ export class QuizService {
           );
         }
 
-        const choiceEntries = shuffle([correctEntry, ...distractors]);
-        const choices = choiceEntries.map((e) => ({ code: e.speciesCode, name: e.comName }));
+        const choices = shuffle([correctEntry, ...distractors]).map((e) => ({
+          code: e.speciesCode,
+          name: e.comName,
+        }));
 
-        return {
-          correctCode,
-          correctName,
-          choices,
-          imageUrl,
-          assetId,
-        };
+        return { correctCode, correctName, choices, imageUrl, assetId };
       } catch (e) {
         lastErr = e;
         continue;
