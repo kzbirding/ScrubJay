@@ -7,7 +7,15 @@ import {
   type ButtonInteraction,
   type Message,
 } from "discord.js";
-import { Context, On, Options, SlashCommand, type SlashCommandContext } from "necord";
+import {
+  Context,
+  On,
+  Options,
+  SlashCommand,
+  StringOption,
+  type ContextOf,
+  type SlashCommandContext,
+} from "necord";
 import { QuizService } from "../q/q.service";
 
 // ---- per-user difficulty (resets on restart) ----
@@ -21,7 +29,7 @@ type ActiveQuiz = {
   correctCode: string;
   correctName: string;
   correctSlug: string;
-  // in easy mode, track which message has the buttons
+  // if set, this quiz used buttons
   easyMessageId?: string;
 };
 const ACTIVE_QUIZ = new Map<string, ActiveQuiz>(); // userId -> quiz
@@ -38,9 +46,20 @@ function slugify(s: string): string {
 
 type QAction = "ask" | "easy" | "normal" | "skip" | "end" | "help";
 
-class QOptions {
-  // optional "action" choice
-  // (Necord will still accept plain /q with no option)
+class QDto {
+  @StringOption({
+    name: "action",
+    description: "Choose what to do",
+    required: false,
+    choices: [
+      { name: "ask (new question)", value: "ask" },
+      { name: "easy (buttons)", value: "easy" },
+      { name: "normal (free response)", value: "normal" },
+      { name: "skip (reveal + new)", value: "skip" },
+      { name: "end (reveal + stop)", value: "end" },
+      { name: "help", value: "help" },
+    ],
+  })
   action?: QAction;
 }
 
@@ -54,22 +73,22 @@ export class QCommand {
   })
   public async onQ(
     @Context() [interaction]: SlashCommandContext,
-    @Options() options: QOptions,
+    @Options() options: QDto,
   ) {
     const userId = interaction.user.id;
     const channelId = interaction.channelId;
 
-    const action = (options?.action ?? "ask") as QAction;
+    const action: QAction = (options?.action ?? "ask") as QAction;
 
     if (action === "help") {
       return interaction.reply({
         ephemeral: true,
         content:
-          "**/q** — sends a new quiz image\n" +
-          "**/q action:easy** — easy mode (4 buttons)\n" +
-          "**/q action:normal** — normal mode (type your guess in chat)\n" +
-          "**/q action:skip** — reveal answer + new image\n" +
-          "**/q action:end** — reveal answer + stop\n",
+          "**/q** → new quiz image\n" +
+          "**/q action:easy** → buttons mode (saved for you)\n" +
+          "**/q action:normal** → free-response mode (saved for you)\n" +
+          "**/q action:skip** → reveal answer + new image\n" +
+          "**/q action:end** → reveal answer + stop\n",
       });
     }
 
@@ -77,9 +96,10 @@ export class QCommand {
       USER_DIFFICULTY.set(userId, action);
       return interaction.reply({
         ephemeral: true,
-        content: action === "easy"
-          ? "✅ Easy mode enabled (buttons). Use **/q** to get a question."
-          : "✅ Normal mode enabled (free response). Use **/q** and then type your guess in chat.",
+        content:
+          action === "easy"
+            ? "✅ Easy mode enabled (buttons). Use **/q** to get a question."
+            : "✅ Normal mode enabled (type your guess in chat). Use **/q** to get a question.",
       });
     }
 
@@ -92,18 +112,14 @@ export class QCommand {
         });
       }
 
-      // reveal answer
       await interaction.reply({
         ephemeral: false,
         content: `✅ Answer: **${st.correctName}**`,
       });
 
-      // clear current
       ACTIVE_QUIZ.delete(userId);
 
       if (action === "end") return;
-
-      // new quiz
       return this.sendQuiz(interaction, userId, channelId);
     }
 
@@ -133,7 +149,7 @@ export class QCommand {
         const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
           q.choices.map((c) =>
             new ButtonBuilder()
-              .setCustomId(`q_pick:${userId}:${c.code}`) // lock buttons to that user
+              .setCustomId(`q_pick:${userId}:${c.code}`) // lock to user
               .setLabel(c.name)
               .setStyle(ButtonStyle.Secondary),
           ),
@@ -149,11 +165,10 @@ export class QCommand {
           correctName: q.correctName,
           correctSlug: slugify(q.correctName),
         });
-
         return;
       }
 
-      // normal mode (no buttons)
+      // normal mode: no buttons
       const msg = await interaction.editReply({ embeds: [embed], components: [] });
 
       ACTIVE_QUIZ.set(userId, {
@@ -171,15 +186,15 @@ export class QCommand {
     }
   }
 
-  // ---- Fix button “interaction failed” ----
+  // ✅ Button handler with correct Necord context typing
   @On("interactionCreate")
-  public async onButton(interaction: any) {
-    if (!interaction?.isButton?.()) return;
+  public async onInteraction(@Context() [interaction]: ContextOf<"interactionCreate">) {
+    if (!interaction.isButton()) return;
 
     const bi = interaction as ButtonInteraction;
     if (!bi.customId.startsWith("q_pick:")) return;
 
-    // ACK immediately so Discord doesn’t show “interaction failed”
+    // ACK immediately to prevent “This interaction failed”
     await bi.deferUpdate().catch(() => null);
 
     const [, lockedUserId, chosenCode] = bi.customId.split(":");
@@ -198,54 +213,17 @@ export class QCommand {
 
     if (correct) {
       ACTIVE_QUIZ.delete(clickerId);
-      await bi.followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` }).catch(() => null);
-
-      // auto next question
-      // (if you don’t want auto-next, tell me and I’ll remove this)
-      // We can’t reuse the interaction reply here, so just send a new message in channel:
-      const ch = bi.channel;
-      if (ch && "send" in ch) {
-        // create a minimal fake interaction-like object for sendQuiz (or just call quiz service directly)
-        const q = await this.quiz.buildQuiz().catch(() => null);
-        if (q) {
-          const embed = new EmbedBuilder()
-            .setTitle("Bird Quiz")
-            .setDescription("Which species is this? (buttons)")
-            .setImage(q.imageUrl)
-            .setFooter({ text: `Asset: ML${q.assetId}` });
-
-          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            q.choices.map((c) =>
-              new ButtonBuilder()
-                .setCustomId(`q_pick:${clickerId}:${c.code}`)
-                .setLabel(c.name)
-                .setStyle(ButtonStyle.Secondary),
-            ),
-          );
-
-          const msg = await (ch as any).send({ embeds: [embed], components: [row] }).catch(() => null);
-          if (msg) {
-            ACTIVE_QUIZ.set(clickerId, {
-              channelId: ch.id,
-              messageId: msg.id,
-              easyMessageId: msg.id,
-              correctCode: q.correctCode,
-              correctName: q.correctName,
-              correctSlug: slugify(q.correctName),
-            });
-          }
-        }
-      }
-      return;
+      return bi.followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` }).catch(() => null);
     }
 
     return bi.followUp({ ephemeral: true, content: "❌ Not quite — try again." }).catch(() => null);
   }
 
-  // ---- Normal mode: free-response guesses ----
+  // ✅ Normal mode: free-response guesses
   @On("messageCreate")
-  public async onGuess(msg: Message) {
-    if (!msg?.author || msg.author.bot) return;
+  public async onMessage(@Context() [msg]: ContextOf<"messageCreate">) {
+  if (!msg.author || msg.author.bot) return;
+
 
     const userId = msg.author.id;
     const st = ACTIVE_QUIZ.get(userId);
@@ -254,42 +232,15 @@ export class QCommand {
     // only accept guesses in same channel
     if (msg.channelId !== st.channelId) return;
 
-    // only in normal mode (no easyMessageId)
+    // only normal mode quizzes (no buttons)
     if (st.easyMessageId) return;
 
     const guess = slugify(msg.content);
     if (!guess) return;
 
-    // forgiving: exact slug match
     if (guess !== st.correctSlug) return;
 
-    // correct
     ACTIVE_QUIZ.delete(userId);
-
     await msg.reply(`✅ Correct! **${st.correctName}**`).catch(() => null);
-
-    // auto next question
-    const q = await this.quiz.buildQuiz().catch(() => null);
-    if (!q) return;
-
-    const embed = new EmbedBuilder()
-      .setTitle("Bird Quiz")
-      .setDescription("Which species is this? (type your guess in chat)")
-      .setImage(q.imageUrl)
-      .setFooter({ text: `Asset: ML${q.assetId}` });
-
-      const ch: any = msg.channel;
-      if (!ch || typeof ch.send !== "function") return;
-
-      const sent = await ch.send({ embeds: [embed] }).catch(() => null);
-
-
-    ACTIVE_QUIZ.set(userId, {
-      channelId: msg.channelId,
-      messageId: sent.id,
-      correctCode: q.correctCode,
-      correctName: q.correctName,
-      correctSlug: slugify(q.correctName),
-    });
   }
 }
