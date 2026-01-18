@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { EbirdTaxonomyService, type TaxonEntry } from "../ebird-taxonomy.service";
-import { SOCAL_COMMON_NAMES } from "./socal.names";
+import { SOCAL_COMMON_NAMES } from "../quiz/socal.names";
 
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -21,14 +21,14 @@ export class QuizService {
   private resolveCommonName(name: string): TaxonEntry | null {
     const e = this.taxonomy.lookupByCommonNameFuzzy(name);
     if (!e) return null;
-    if (e.category && e.category !== "species") return null; // keep quiz clean
+    if (e.category && e.category !== "species") return null;
     return e;
   }
 
   private extractAssetIdsFromHtml(html: string): string[] {
     const ids = new Set<string>();
 
-    // 1) If the page includes direct Cornell CDN asset URLs
+    // Cornell CDN URLs
     {
       const re =
         /https:\/\/cdn\.download\.ams\.birds\.cornell\.edu\/api\/v1\/asset\/(\d{6,})(?:\/\d+)?/gi;
@@ -38,7 +38,7 @@ export class QuizService {
       }
     }
 
-    // 2) eBird media catalog HTML often includes “ML#########” in link text (works even when CDN URLs are absent) :contentReference[oaicite:1]{index=1}
+    // ML######## in HTML
     {
       const re = /\bML(\d{6,})\b/gi;
       let m: RegExpExecArray | null;
@@ -47,7 +47,7 @@ export class QuizService {
       }
     }
 
-    // 3) Sometimes there are direct Macaulay asset links
+    // direct asset links
     {
       const re = /macaulaylibrary\.org\/asset\/(\d{6,})\b/gi;
       let m: RegExpExecArray | null;
@@ -65,7 +65,6 @@ export class QuizService {
     url.searchParams.set("mediaType", "photo");
     url.searchParams.set("sort", "rating_rank_desc");
     url.searchParams.set("page", String(page));
-    // These help keep the result “bird photos only”, like the UI toggle.
     url.searchParams.set("birdOnly", "true");
     url.searchParams.set("view", "grid");
 
@@ -86,12 +85,10 @@ export class QuizService {
     const MAX_PAGE_GUESS = 15;
     const ATTEMPTS = 10;
 
-    // Try multiple random pages to get variety.
     for (let i = 0; i < ATTEMPTS; i++) {
       const page = 1 + Math.floor(Math.random() * MAX_PAGE_GUESS);
       const html = await this.fetchCatalogPage(taxonCode, page);
       const ids = this.extractAssetIdsFromHtml(html);
-
       if (ids.length === 0) continue;
 
       const assetId = pickRandom(ids);
@@ -99,18 +96,24 @@ export class QuizService {
       return { assetId, imageUrl };
     }
 
-    // Fallback: page 1
-    {
-      const html = await this.fetchCatalogPage(taxonCode, 1);
-      const ids = this.extractAssetIdsFromHtml(html);
-      if (ids.length > 0) {
-        const assetId = pickRandom(ids);
-        const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
-        return { assetId, imageUrl };
-      }
+    // fallback page 1
+    const html = await this.fetchCatalogPage(taxonCode, 1);
+    const ids = this.extractAssetIdsFromHtml(html);
+    if (ids.length > 0) {
+      const assetId = pickRandom(ids);
+      const imageUrl = `https://cdn.download.ams.birds.cornell.edu/api/v1/asset/${assetId}/900`;
+      return { assetId, imageUrl };
     }
 
     throw new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
+  }
+
+  // ✅ NEW: request another random photo for a specific speciesCode
+  public async getPhotoForSpeciesCode(
+    speciesCode: string,
+  ): Promise<{ assetId: string; imageUrl: string }> {
+    await this.taxonomy.ensureLoaded();
+    return this.getRandomMacaulayPhotoFromEbirdCatalog(speciesCode);
   }
 
   public async buildQuiz(): Promise<{
@@ -124,7 +127,6 @@ export class QuizService {
 
     let lastErr: unknown = null;
 
-    // Try multiple birds until one has photos we can extract.
     for (let attempt = 0; attempt < 18; attempt++) {
       let correctEntry: TaxonEntry | null = null;
 
@@ -141,7 +143,6 @@ export class QuizService {
       try {
         const { assetId, imageUrl } = await this.getRandomMacaulayPhotoFromEbirdCatalog(correctCode);
 
-        // Build 3 distractors
         const distractors: TaxonEntry[] = [];
         const seenCodes = new Set<string>([correctCode]);
 
