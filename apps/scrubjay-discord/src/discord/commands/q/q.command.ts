@@ -85,10 +85,10 @@ class QDto {
       { name: "easy (buttons)", value: "easy" },
       { name: "normal (free response)", value: "normal" },
       { name: "photo (another photo)", value: "photo" },
-      { name: "hint (first letter)", value: "hint" },
-      { name: "skip (reveal + new)", value: "skip" },
-      { name: "end (reveal + stop)", value: "end" },
-      { name: "help", value: "help" },
+      { name: "hint", value: "hint" },
+      { name: "skip", value: "skip" },
+      { name: "end", value: "end" },
+      { name: "help (command list)", value: "help" },
     ],
   })
   action?: QAction;
@@ -189,20 +189,22 @@ if (action === "hint") {
 
     // ask: block if already open
     const existing = ACTIVE_QUIZ.get(userId);
-    if (existing && existing.channelId === channelId) {
-      return interaction.reply({
-        ephemeral: true,
-        content:
-          "You already have an active quiz here.\n" +
-          "• Answer with **/qa guess:<species>**\n" +
-          "• or **/q action:hint** / **/q action:photo**\n" +
-          "• or skip with **/q action:skip**\n" +
-          "• or end with **/q action:end**",
-      });
+    // ask: only block if user is trying to ASK while a quiz is already open
+    if (action === "ask") {
+      const existing = ACTIVE_QUIZ.get(userId);
+      if (existing && existing.channelId === channelId) {
+        return interaction.reply({
+          ephemeral: true,
+          content:
+            "You already have an active quiz here.\n" +
+            "• Answer with **/qa guess:<species>**\n" +
+            "• or **/q action:photo** / **/q action:hint**\n" +
+            "• or skip with **/q action:skip**\n" +
+            "• or end with **/q action:end**",
+        });
+      }
     }
 
-    return this.sendQuiz(interaction, userId, channelId);
-  }
 
   @SlashCommand({ name: "qa", description: "Answer your current quiz" })
   public async onQa(@Context() [interaction]: SlashCommandContext, @Options() options: QaDto) {
