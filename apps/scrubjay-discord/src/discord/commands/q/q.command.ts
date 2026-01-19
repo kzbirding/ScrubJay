@@ -156,11 +156,34 @@ export class QCommand {
   }
 
   // ---------------- /q normal ----------------
-  @Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
-  public async normal(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "normal");
-    return interaction.reply({ ephemeral: true, content: "✅ Normal mode enabled (free response)." });
+@Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
+public async normal(@Context() [interaction]: SlashCommandContext) {
+  const userId = interaction.user.id;
+  const channelId = interaction.channelId;
+
+  USER_DIFFICULTY.set(userId, "normal");
+
+  // ✅ If there's an active quiz in this channel and it's currently easy-mode,
+  // convert it immediately (remove buttons + allow /qa).
+  const st = ACTIVE_QUIZ.get(userId);
+  if (st && st.channelId === channelId && st.easyMessageId) {
+    // update state: normal mode, no easyMessageId
+    const next: ActiveQuiz = { ...st, difficulty: "normal" };
+    delete (next as any).easyMessageId;
+    ACTIVE_QUIZ.set(userId, next);
+
+    // try to remove buttons from the existing message so user can /qa right away
+    const ch: any = interaction.channel;
+    const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
+    if (msg) await msg.edit({ components: [] }).catch(() => null);
   }
+
+  return interaction.reply({
+    ephemeral: true,
+    content: "✅ Normal mode enabled (free response).",
+  });
+}
+
 
   // ---------------- /q pool ----------------
   @Subcommand({ name: "pool", description: "Choose which bird pool you quiz from" })
