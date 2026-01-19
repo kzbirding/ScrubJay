@@ -19,17 +19,48 @@ import {
 import { QuizService } from "../q/q.service";
 import { STANDARD_POOL } from "./standard.pool";
 import { EXPANDED_POOL } from "./expanded.pool";
+import { WATERFOWL_POOL } from "./waterfowl.pool";
+import { SHOREBIRD_POOL } from "./shorebird.pool";
+import { WARBLER_POOL } from "./warbler.pool";
+import { SPARROW_POOL } from "./sparrow.pool";
+import { GULL_POOL } from "./gull.pool";
+import { FLYCATCHER_POOL } from "./flycatcher.pool";
 
 // ---- per-user difficulty (resets on restart) ----
 type Difficulty = "easy" | "normal";
 const USER_DIFFICULTY = new Map<string, Difficulty>();
 
-type PoolName = "standard" | "expanded";
+type PoolName =
+  | "standard"
+  | "expanded"
+  | "waterfowl"
+  | "shorebirds"
+  | "warblers"
+  | "sparrows"
+  | "laridae"
+  | "flycatchers";
 const USER_POOL = new Map<string, PoolName>();
 
 const POOLS: Record<PoolName, readonly string[]> = {
   standard: STANDARD_POOL,
   expanded: EXPANDED_POOL,
+  waterfowl: WATERFOWL_POOL,
+  shorebirds: SHOREBIRD_POOL,
+  warblers: WARBLER_POOL,
+  sparrows: SPARROW_POOL,
+  laridae: GULL_POOL,
+  flycatchers: FLYCATCHER_POOL,
+};
+
+const POOL_LABEL: Record<PoolName, string> = {
+  standard: "standard",
+  expanded: "expanded",
+  waterfowl: "Waterfowl",
+  shorebirds: "shorebirds",
+  warblers: "warblers",
+  sparrows: "sparrows",
+  laridae: "Laridae",
+  flycatchers: "flycatchers",
 };
 
 // ---- per-user active quiz state (resets on restart) ----
@@ -104,6 +135,12 @@ class PoolDto {
     choices: [
       { name: "standard", value: "standard" },
       { name: "expanded", value: "expanded" },
+      { name: "waterfowl", value: "waterfowl" },
+      { name: "shorebirds", value: "shorebirds" },
+      { name: "warblers", value: "warblers" },
+      { name: "sparrows", value: "sparrows" },
+      { name: "gulls", value: "laridae" },
+      { name: "flycatchers", value: "flycatchers" },
     ],
   })
   name!: PoolName;
@@ -140,7 +177,7 @@ export class QCommand {
         "**/q easy** → buttons mode (saved for you)\n" +
         "**/q normal** → free-response mode (saved for you)\n" +
         "**/qa guess:<species>** → answer (normal; fuzzy)\n" +
-        "**/q pool name:<standard|expanded>** → choose bird pool (saved for you)\n" +
+        "**/q pool name:<pool>** → choose bird pool (saved for you)\n" +
         "**/q photo** → another photo of current bird\n" +
         "**/q hint** → first letter (normal only)\n" +
         "**/q skip** → reveal answer + new image\n" +
@@ -149,117 +186,105 @@ export class QCommand {
   }
 
   // ---------------- /q easy ----------------
-@Subcommand({ name: "easy", description: "Enable easy mode (buttons)" })
-public async easy(@Context() [interaction]: SlashCommandContext) {
-  const userId = interaction.user.id;
-  const channelId = interaction.channelId;
+  @Subcommand({ name: "easy", description: "Enable easy mode (buttons)" })
+  public async easy(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
 
-  USER_DIFFICULTY.set(userId, "easy");
+    USER_DIFFICULTY.set(userId, "easy");
 
-  // ✅ If there's an active quiz in this channel and it's currently normal-mode,
-  // convert it immediately (add buttons for the SAME species).
-  const st = ACTIVE_QUIZ.get(userId);
-  if (st && st.channelId === channelId && !st.easyMessageId) {
-    const pool: PoolName = st.pool ?? (USER_POOL.get(userId) ?? "standard");
-    const poolList = POOLS[pool] ?? [];
+    // If there's an active quiz in this channel and it's currently normal-mode,
+    // convert it immediately (add buttons for the SAME species).
+    const st = ACTIVE_QUIZ.get(userId);
+    if (st && st.channelId === channelId && !st.easyMessageId) {
+      const pool: PoolName = st.pool ?? (USER_POOL.get(userId) ?? "standard");
+      const poolList = POOLS[pool] ?? [];
 
-    // pick 3 distractor names from the pool (no taxonomy needed)
-    const distractors: string[] = [];
-    const used = new Set<string>([slugify(st.correctName)]);
-    const maxTries = 200;
+      // pick 3 distractor names from the pool (no taxonomy needed)
+      const distractors: string[] = [];
+      const used = new Set<string>([slugify(st.correctName)]);
+      const maxTries = 200;
 
-    for (let i = 0; i < maxTries && distractors.length < 3; i++) {
-      const name = poolList[Math.floor(Math.random() * poolList.length)];
-      const s = slugify(name);
-      if (!s || used.has(s)) continue;
-      used.add(s);
-      distractors.push(name);
-    }
+      for (let i = 0; i < maxTries && distractors.length < 3; i++) {
+        const name = poolList[Math.floor(Math.random() * poolList.length)];
+        const s = slugify(name);
+        if (!s || used.has(s)) continue;
+        used.add(s);
+        distractors.push(name);
+      }
 
-    // if pool is too small, just don't convert
-    if (distractors.length < 3) {
-      return interaction.reply({
-        ephemeral: true,
-        content:
-          "✅ Easy mode enabled, but I couldn't generate enough answer choices for the current question. " +
-          "Use **/q skip** or **/q start** to get a new one.",
-      });
-    }
+      if (distractors.length >= 3) {
+        const choices = [
+          { label: st.correctName, id: st.correctCode }, // correct button carries correctCode
+          { label: distractors[0], id: "d0" },
+          { label: distractors[1], id: "d1" },
+          { label: distractors[2], id: "d2" },
+        ].sort(() => Math.random() - 0.5);
 
-    // shuffle 4 choices
-    const choices = [
-      { label: st.correctName, id: st.correctCode }, // ✅ correct button carries correctCode
-      { label: distractors[0], id: "d0" },
-      { label: distractors[1], id: "d1" },
-      { label: distractors[2], id: "d2" },
-    ].sort(() => Math.random() - 0.5);
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          choices.map((c) =>
+            new ButtonBuilder()
+              .setCustomId(`q_pick:${userId}:${c.id}`)
+              .setLabel(c.label)
+              .setStyle(ButtonStyle.Secondary),
+          ),
+        );
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      choices.map((c) =>
-        new ButtonBuilder()
-          .setCustomId(`q_pick:${userId}:${c.id}`)
-          .setLabel(c.label)
-          .setStyle(ButtonStyle.Secondary),
-      ),
-    );
+        // update state to easy mode for current question
+        const next: ActiveQuiz = { ...st, difficulty: "easy", easyMessageId: st.messageId };
+        ACTIVE_QUIZ.set(userId, next);
 
-    // update state to easy mode for current question
-    const next: ActiveQuiz = { ...st, difficulty: "easy", easyMessageId: st.messageId };
-    ACTIVE_QUIZ.set(userId, next);
-
-    // edit the existing message to show buttons + update title to show (easy,...)
-    const ch: any = interaction.channel;
-    const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
-    if (msg) {
-      const embed = msg.embeds?.[0];
-      if (embed) {
-        // rebuild minimal embed so title updates cleanly
-        const rebuilt = new EmbedBuilder(embed.data)
-          .setTitle(`Bird Quiz (easy, ${pool} pool)`)
-          .setDescription("Which species is this? (buttons)");
-        await msg.edit({ embeds: [rebuilt], components: [row] }).catch(() => null);
+        // edit the existing message to show buttons + update title
+        const ch: any = interaction.channel;
+        const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
+        if (msg) {
+          const embed = msg.embeds?.[0];
+          if (embed) {
+            const rebuilt = new EmbedBuilder(embed.data)
+              .setTitle(`Bird Quiz (easy, ${POOL_LABEL[pool]} pool)`)
+              .setDescription("Which species is this? (buttons)");
+            await msg.edit({ embeds: [rebuilt], components: [row] }).catch(() => null);
+          } else {
+            await msg.edit({ components: [row] }).catch(() => null);
+          }
+        }
       } else {
-        await msg.edit({ components: [row] }).catch(() => null);
+        // pool too small / too many duplicates
+        return interaction.reply({
+          ephemeral: true,
+          content:
+            "✅ Easy mode enabled, but I couldn't generate enough answer choices for the current question. " +
+            "Use **/q skip** or **/q start** to get a new one.",
+        });
       }
     }
+
+    return interaction.reply({ ephemeral: true, content: "✅ Easy mode enabled (buttons)." });
   }
-
-  return interaction.reply({
-    ephemeral: true,
-    content: "✅ Easy mode enabled (buttons).",
-  });
-}
-
 
   // ---------------- /q normal ----------------
-@Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
-public async normal(@Context() [interaction]: SlashCommandContext) {
-  const userId = interaction.user.id;
-  const channelId = interaction.channelId;
+  @Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
+  public async normal(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
 
-  USER_DIFFICULTY.set(userId, "normal");
+    USER_DIFFICULTY.set(userId, "normal");
 
-  // ✅ If there's an active quiz in this channel and it's currently easy-mode,
-  // convert it immediately (remove buttons + allow /qa).
-  const st = ACTIVE_QUIZ.get(userId);
-  if (st && st.channelId === channelId && st.easyMessageId) {
-    // update state: normal mode, no easyMessageId
-    const next: ActiveQuiz = { ...st, difficulty: "normal" };
-    delete (next as any).easyMessageId;
-    ACTIVE_QUIZ.set(userId, next);
+    // If there's an active quiz in this channel and it's currently easy-mode,
+    // convert it immediately (remove buttons + allow /qa).
+    const st = ACTIVE_QUIZ.get(userId);
+    if (st && st.channelId === channelId && st.easyMessageId) {
+      const next: ActiveQuiz = { ...st, difficulty: "normal" };
+      delete (next as any).easyMessageId;
+      ACTIVE_QUIZ.set(userId, next);
 
-    // try to remove buttons from the existing message so user can /qa right away
-    const ch: any = interaction.channel;
-    const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
-    if (msg) await msg.edit({ components: [] }).catch(() => null);
+      const ch: any = interaction.channel;
+      const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
+      if (msg) await msg.edit({ components: [] }).catch(() => null);
+    }
+
+    return interaction.reply({ ephemeral: true, content: "✅ Normal mode enabled (free response)." });
   }
-
-  return interaction.reply({
-    ephemeral: true,
-    content: "✅ Normal mode enabled (free response).",
-  });
-}
-
 
   // ---------------- /q pool ----------------
   @Subcommand({ name: "pool", description: "Choose which bird pool you quiz from" })
@@ -379,7 +404,7 @@ public async normal(@Context() [interaction]: SlashCommandContext) {
     const q = await this.quiz.buildQuiz(POOLS[pool]);
 
     const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${difficulty}, ${pool} pool)`)
+      .setTitle(`Bird Quiz (${difficulty}, ${POOL_LABEL[pool]} pool)`)
       .setDescription(
         difficulty === "easy"
           ? "Which species is this?"
@@ -431,7 +456,7 @@ public async normal(@Context() [interaction]: SlashCommandContext) {
     const { imageUrl, assetId } = await this.quiz.getPhotoForSpeciesCode(st.correctCode);
 
     const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
+      .setTitle(`Bird Quiz (${st.difficulty}, ${POOL_LABEL[st.pool]} pool)`)
       .setImage(imageUrl)
       .setFooter({ text: `Asset: ML${assetId}` });
 
@@ -482,7 +507,7 @@ public async normal(@Context() [interaction]: SlashCommandContext) {
     }
 
     const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
+      .setTitle(`Bird Quiz (${st.difficulty}, ${POOL_LABEL[st.pool]} pool)`)
       .setDescription("Which species is this? (buttons)")
       .setImage(q.imageUrl)
       .setFooter({ text: `Asset: ML${q.assetId}` });
@@ -566,12 +591,9 @@ export class QACommand {
     });
 
     // immediately show next question
-    // (reuse QCommand's logic by calling the same QuizService + building a new quiz here)
-    // We'll mimic sendQuiz safely:
     const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
     const pool: PoolName = USER_POOL.get(userId) ?? "standard";
 
-    // safe follow-up: we already replied above
     const ch: any = interaction.channel;
     if (!ch || typeof ch.send !== "function") return;
 
@@ -582,7 +604,7 @@ export class QACommand {
     }
 
     const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${difficulty}, ${pool} pool)`)
+      .setTitle(`Bird Quiz (${difficulty}, ${POOL_LABEL[pool]} pool)`)
       .setDescription("Which species is this? (answer with /qa)")
       .setImage(q.imageUrl)
       .setFooter({ text: `Asset: ML${q.assetId}` });
