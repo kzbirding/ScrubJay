@@ -149,11 +149,87 @@ export class QCommand {
   }
 
   // ---------------- /q easy ----------------
-  @Subcommand({ name: "easy", description: "Enable easy mode (buttons)" })
-  public async easy(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "easy");
-    return interaction.reply({ ephemeral: true, content: "✅ Easy mode enabled (buttons)." });
+@Subcommand({ name: "easy", description: "Enable easy mode (buttons)" })
+public async easy(@Context() [interaction]: SlashCommandContext) {
+  const userId = interaction.user.id;
+  const channelId = interaction.channelId;
+
+  USER_DIFFICULTY.set(userId, "easy");
+
+  // ✅ If there's an active quiz in this channel and it's currently normal-mode,
+  // convert it immediately (add buttons for the SAME species).
+  const st = ACTIVE_QUIZ.get(userId);
+  if (st && st.channelId === channelId && !st.easyMessageId) {
+    const pool: PoolName = st.pool ?? (USER_POOL.get(userId) ?? "standard");
+    const poolList = POOLS[pool] ?? [];
+
+    // pick 3 distractor names from the pool (no taxonomy needed)
+    const distractors: string[] = [];
+    const used = new Set<string>([slugify(st.correctName)]);
+    const maxTries = 200;
+
+    for (let i = 0; i < maxTries && distractors.length < 3; i++) {
+      const name = poolList[Math.floor(Math.random() * poolList.length)];
+      const s = slugify(name);
+      if (!s || used.has(s)) continue;
+      used.add(s);
+      distractors.push(name);
+    }
+
+    // if pool is too small, just don't convert
+    if (distractors.length < 3) {
+      return interaction.reply({
+        ephemeral: true,
+        content:
+          "✅ Easy mode enabled, but I couldn't generate enough answer choices for the current question. " +
+          "Use **/q skip** or **/q start** to get a new one.",
+      });
+    }
+
+    // shuffle 4 choices
+    const choices = [
+      { label: st.correctName, id: st.correctCode }, // ✅ correct button carries correctCode
+      { label: distractors[0], id: "d0" },
+      { label: distractors[1], id: "d1" },
+      { label: distractors[2], id: "d2" },
+    ].sort(() => Math.random() - 0.5);
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      choices.map((c) =>
+        new ButtonBuilder()
+          .setCustomId(`q_pick:${userId}:${c.id}`)
+          .setLabel(c.label)
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+
+    // update state to easy mode for current question
+    const next: ActiveQuiz = { ...st, difficulty: "easy", easyMessageId: st.messageId };
+    ACTIVE_QUIZ.set(userId, next);
+
+    // edit the existing message to show buttons + update title to show (easy,...)
+    const ch: any = interaction.channel;
+    const msg = await ch?.messages?.fetch?.(st.messageId).catch(() => null);
+    if (msg) {
+      const embed = msg.embeds?.[0];
+      if (embed) {
+        // rebuild minimal embed so title updates cleanly
+        const rebuilt = new EmbedBuilder(embed.data)
+          .setTitle(`Bird Quiz (easy, ${pool} pool)`)
+          .setDescription("Which species is this? (buttons)");
+        await msg.edit({ embeds: [rebuilt], components: [row] }).catch(() => null);
+      } else {
+        await msg.edit({ components: [row] }).catch(() => null);
+      }
+    }
   }
+
+  return interaction.reply({
+    ephemeral: true,
+    content: "✅ Easy mode enabled (buttons).",
+  });
+}
+
 
   // ---------------- /q normal ----------------
 @Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
