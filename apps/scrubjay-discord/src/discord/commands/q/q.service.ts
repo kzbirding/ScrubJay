@@ -105,10 +105,12 @@ export class QuizService {
       return { assetId, imageUrl };
     }
 
-    throw new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
+    throw new Error(
+      `No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`,
+    );
   }
 
-  // request another random photo for a specific speciesCode
+  // ✅ request another random photo for a specific speciesCode
   public async getPhotoForSpeciesCode(
     speciesCode: string,
   ): Promise<{ assetId: string; imageUrl: string }> {
@@ -116,9 +118,8 @@ export class QuizService {
     return this.getRandomMacaulayPhotoFromEbirdCatalog(speciesCode);
   }
 
-  public async buildQuiz(
-    pool: readonly string[] = STANDARD_POOL,
-  ): Promise<{
+  // ✅ pool support (defaults to STANDARD_POOL)
+  public async buildQuiz(pool: readonly string[] = STANDARD_POOL): Promise<{
     correctCode: string;
     correctName: string;
     choices: { code: string; name: string }[];
@@ -143,15 +144,14 @@ export class QuizService {
       const correctName = correctEntry.comName;
 
       try {
-        const { assetId, imageUrl } = await this.getRandomMacaulayPhotoFromEbirdCatalog(correctCode);
+        const { assetId, imageUrl } =
+          await this.getRandomMacaulayPhotoFromEbirdCatalog(correctCode);
 
         const distractors: TaxonEntry[] = [];
         const seenCodes = new Set<string>([correctCode]);
 
         const candidates = shuffle(
-          pool.filter(
-            (n) => n.toLowerCase().trim() !== correctName.toLowerCase().trim(),
-          ),
+          pool.filter((n) => n.toLowerCase().trim() !== correctName.toLowerCase().trim()),
         );
 
         for (const name of candidates) {
