@@ -39,6 +39,8 @@ type ActiveQuiz = {
   correctCode: string;
   correctName: string;
   correctSlug: string;
+  difficulty: Difficulty;
+  pool: PoolName;
   // if set, this quiz used buttons
   easyMessageId?: string;
 };
@@ -55,7 +57,7 @@ function slugify(s: string): string {
 }
 
 // --- fuzzy matching helpers for /qa ---
-function levenshteinRaw(a: string, b: string): number {
+function levenshtein(a: string, b: string): number {
   const A = slugify(a);
   const B = slugify(b);
 
@@ -90,10 +92,10 @@ function similarity(a: string, b: string): number {
   const B = slugify(b);
   const denom = Math.max(A.length, B.length);
   if (denom === 0) return 0;
-  return 1 - levenshteinRaw(a, b) / denom;
+  return 1 - levenshtein(a, b) / denom;
 }
 
-// DTOs
+// ----- DTOs -----
 class PoolDto {
   @StringOption({
     name: "name",
@@ -116,15 +118,310 @@ class QaDto {
   guess!: string;
 }
 
+/**
+ * /q parent command + subcommands
+ * IMPORTANT: class-level SlashCommand is required for Necord subcommands.
+ */
+@SlashCommand({
+  name: "q",
+  description: "Bird quiz",
+})
 @Injectable()
 export class QCommand {
   constructor(private readonly quiz: QuizService) {}
 
-  // ---------------- /qa (separate command) ----------------
-  @SlashCommand({
-    name: "qa",
-    description: "Answer your current quiz (normal mode)",
-  })
+  // ---------------- /q help ----------------
+  @Subcommand({ name: "help", description: "Show quiz help" })
+  public async help(@Context() [interaction]: SlashCommandContext) {
+    return interaction.reply({
+      ephemeral: true,
+      content:
+        "**/q start** → new quiz image\n" +
+        "**/q easy** → buttons mode (saved for you)\n" +
+        "**/q normal** → free-response mode (saved for you)\n" +
+        "**/qa guess:<species>** → answer (normal; fuzzy)\n" +
+        "**/q pool name:<standard|expanded>** → choose bird pool (saved for you)\n" +
+        "**/q photo** → another photo of current bird\n" +
+        "**/q hint** → first letter (normal only)\n" +
+        "**/q skip** → reveal answer + new image\n" +
+        "**/q end** → reveal answer + stop\n",
+    });
+  }
+
+  // ---------------- /q easy ----------------
+  @Subcommand({ name: "easy", description: "Enable easy mode (buttons)" })
+  public async easy(@Context() [interaction]: SlashCommandContext) {
+    USER_DIFFICULTY.set(interaction.user.id, "easy");
+    return interaction.reply({ ephemeral: true, content: "✅ Easy mode enabled (buttons)." });
+  }
+
+  // ---------------- /q normal ----------------
+  @Subcommand({ name: "normal", description: "Enable normal mode (free response)" })
+  public async normal(@Context() [interaction]: SlashCommandContext) {
+    USER_DIFFICULTY.set(interaction.user.id, "normal");
+    return interaction.reply({ ephemeral: true, content: "✅ Normal mode enabled (free response)." });
+  }
+
+  // ---------------- /q pool ----------------
+  @Subcommand({ name: "pool", description: "Choose which bird pool you quiz from" })
+  public async pool(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() options: PoolDto,
+  ) {
+    USER_POOL.set(interaction.user.id, options.name);
+    return interaction.reply({ ephemeral: true, content: `✅ Pool set to **${options.name}**.` });
+  }
+
+  // ---------------- /q start ----------------
+  @Subcommand({ name: "start", description: "Start (or continue) your quiz" })
+  public async start(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
+
+    const st = ACTIVE_QUIZ.get(userId);
+    if (st && st.channelId === channelId) {
+      return interaction.reply({
+        ephemeral: true,
+        content:
+          "You already have an active quiz here.\n" +
+          "Use **/qa** (normal), **/q photo**, **/q hint**, **/q skip**, or **/q end**.",
+      });
+    }
+
+    return this.sendQuiz(interaction, userId, channelId);
+  }
+
+  // ---------------- /q hint ----------------
+  @Subcommand({ name: "hint", description: "Show the first letter (normal only)" })
+  public async hint(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
+
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st || st.channelId !== channelId) {
+      return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q start**." });
+    }
+    if (st.difficulty !== "normal" || st.easyMessageId) {
+      return interaction.reply({ ephemeral: true, content: "Hints are only available in **normal mode**." });
+    }
+
+    return interaction.reply({
+      ephemeral: true,
+      content: `💡 Starts with **${st.correctName[0].toUpperCase()}**`,
+    });
+  }
+
+  // ---------------- /q photo ----------------
+  @Subcommand({ name: "photo", description: "Get another photo of the current species" })
+  public async photo(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
+
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st || st.channelId !== channelId) {
+      return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q start**." });
+    }
+
+    await interaction.reply({ ephemeral: true, content: "📸 Getting another photo..." });
+    return this.sendAnotherPhoto(interaction, userId, st);
+  }
+
+  // ---------------- /q skip ----------------
+  @Subcommand({ name: "skip", description: "Reveal answer and immediately show a new question" })
+  public async skip(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
+
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st || st.channelId !== channelId) {
+      return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q start**." });
+    }
+
+    await interaction.reply({ ephemeral: false, content: `⏭️ Skipped. Answer: **${st.correctName}**` });
+    ACTIVE_QUIZ.delete(userId);
+
+    return this.sendQuiz(interaction, userId, channelId);
+  }
+
+  // ---------------- /q end ----------------
+  @Subcommand({ name: "end", description: "Reveal answer and end the current question" })
+  public async end(@Context() [interaction]: SlashCommandContext) {
+    const userId = interaction.user.id;
+    const channelId = interaction.channelId;
+
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st || st.channelId !== channelId) {
+      return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q start**." });
+    }
+
+    await interaction.reply({ ephemeral: false, content: `🛑 Ended. Answer: **${st.correctName}**` });
+    ACTIVE_QUIZ.delete(userId);
+    return;
+  }
+
+  // ---------- quiz sender ----------
+  private async sendQuiz(interaction: any, userId: string, channelId: string) {
+    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
+    const pool: PoolName = USER_POOL.get(userId) ?? "standard";
+
+    // safe defer (so we can call after a reply, e.g. skip)
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply();
+      }
+    } catch {}
+
+    const respond = async (payload: any) => {
+      if (interaction.deferred) return interaction.editReply(payload);
+      if (interaction.replied) return interaction.followUp(payload);
+      return interaction.reply(payload);
+    };
+
+    const q = await this.quiz.buildQuiz(POOLS[pool]);
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Bird Quiz (${difficulty}, ${pool} pool)`)
+      .setDescription(
+        difficulty === "easy"
+          ? "Which species is this?"
+          : "Which species is this? (answer with /qa)",
+      )
+      .setImage(q.imageUrl)
+      .setFooter({ text: `Asset: ML${q.assetId}` });
+
+    if (difficulty === "easy") {
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        q.choices.map((c) =>
+          new ButtonBuilder()
+            .setCustomId(`q_pick:${userId}:${c.code}`)
+            .setLabel(c.name)
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      );
+
+      const msg = await respond({ embeds: [embed], components: [row] });
+      ACTIVE_QUIZ.set(userId, {
+        channelId,
+        messageId: msg.id,
+        easyMessageId: msg.id,
+        correctCode: q.correctCode,
+        correctName: q.correctName,
+        correctSlug: slugify(q.correctName),
+        difficulty,
+        pool,
+      });
+      return;
+    }
+
+    const msg = await respond({ embeds: [embed] });
+    ACTIVE_QUIZ.set(userId, {
+      channelId,
+      messageId: msg.id,
+      correctCode: q.correctCode,
+      correctName: q.correctName,
+      correctSlug: slugify(q.correctName),
+      difficulty,
+      pool,
+    });
+  }
+
+  private async sendAnotherPhoto(interaction: any, userId: string, st: ActiveQuiz) {
+    const ch: any = interaction.channel;
+    if (!ch || typeof ch.send !== "function") return;
+
+    const { imageUrl, assetId } = await this.quiz.getPhotoForSpeciesCode(st.correctCode);
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
+      .setImage(imageUrl)
+      .setFooter({ text: `Asset: ML${assetId}` });
+
+    const msg = await ch.send({ embeds: [embed] });
+    ACTIVE_QUIZ.set(userId, { ...st, messageId: msg.id });
+  }
+
+  // ---------------- easy-mode button handler ----------------
+  @On("interactionCreate")
+  public async onInteraction(@Context() [interaction]: ContextOf<"interactionCreate">) {
+    if (!interaction.isButton()) return;
+
+    const bi = interaction as ButtonInteraction;
+    if (!bi.customId.startsWith("q_pick:")) return;
+
+    await bi.deferUpdate().catch(() => null);
+
+    const [, lockedUserId, chosenCode] = bi.customId.split(":");
+    if (bi.user.id !== lockedUserId) {
+      return bi.followUp({ ephemeral: true, content: "This quiz is for someone else." });
+    }
+
+    const st = ACTIVE_QUIZ.get(lockedUserId);
+    if (!st || st.easyMessageId !== bi.message.id) {
+      return bi.followUp({ ephemeral: true, content: "Quiz expired." });
+    }
+
+    if (chosenCode !== st.correctCode) {
+      return bi.followUp({ ephemeral: true, content: "❌ Not quite." });
+    }
+
+    ACTIVE_QUIZ.delete(lockedUserId);
+
+    await bi
+      .followUp({ ephemeral: false, content: `✅ Correct! **${st.correctName}**` })
+      .catch(() => null);
+
+    // auto-next (same pool + easy)
+    const ch: any = bi.channel;
+    if (!ch || typeof ch.send !== "function") return;
+
+    const q = await this.quiz.buildQuiz(POOLS[st.pool]).catch(() => null);
+    if (!q) {
+      await ch
+        .send("⚠️ I couldn’t generate a new quiz image right now. Try **/q start** again.")
+        .catch(() => null);
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
+      .setDescription("Which species is this? (buttons)")
+      .setImage(q.imageUrl)
+      .setFooter({ text: `Asset: ML${q.assetId}` });
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      q.choices.map((c) =>
+        new ButtonBuilder()
+          .setCustomId(`q_pick:${lockedUserId}:${c.code}`)
+          .setLabel(c.name)
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+
+    const msg = await ch.send({ embeds: [embed], components: [row] }).catch(() => null);
+    if (!msg) return;
+
+    ACTIVE_QUIZ.set(lockedUserId, {
+      channelId: ch.id,
+      messageId: msg.id,
+      easyMessageId: msg.id,
+      correctCode: q.correctCode,
+      correctName: q.correctName,
+      correctSlug: slugify(q.correctName),
+      difficulty: st.difficulty,
+      pool: st.pool,
+    });
+  }
+}
+
+/**
+ * /qa command (separate from /q parent/subcommands)
+ * Keeping it separate avoids Necord parent/subcommand metadata issues.
+ */
+@Injectable()
+export class QACommand {
+  constructor(private readonly quiz: QuizService) {}
+
+  @SlashCommand({ name: "qa", description: "Answer your current quiz (normal mode)" })
   public async onQa(
     @Context() [interaction]: SlashCommandContext,
     @Options() options: QaDto,
@@ -134,17 +431,14 @@ export class QCommand {
 
     const st = ACTIVE_QUIZ.get(userId);
     if (!st || st.channelId !== channelId) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "No active quiz in this channel. Use **/q** first.",
-      });
+      return interaction.reply({ ephemeral: true, content: "No active quiz here. Use **/q start**." });
     }
 
     // easy mode uses buttons
-    if (st.easyMessageId) {
+    if (st.easyMessageId || st.difficulty === "easy") {
       return interaction.reply({
         ephemeral: true,
-        content: "This question is in **easy mode** (buttons). Use the buttons to answer.",
+        content: "This question is **easy mode** (buttons). Use the buttons to answer.",
       });
     }
 
@@ -153,7 +447,7 @@ export class QCommand {
     if (!guessSlug) {
       return interaction.reply({
         ephemeral: true,
-        content: "Type a guess like: **/qa guess:Anna's Hummingbird**",
+        content: "Try: **/qa guess:Anna's Hummingbird**",
       });
     }
 
@@ -167,257 +461,44 @@ export class QCommand {
 
     ACTIVE_QUIZ.delete(userId);
 
-    // announce correct (public), then next question
     await interaction.reply({
       ephemeral: false,
       content: `✅ Correct! **${st.correctName}**`,
     });
 
-    return this.sendQuiz(interaction, userId, channelId);
-  }
-
-  // ---------------- Parent command /q ----------------
-  @SlashCommand({
-    name: "q",
-    description: "Bird quiz",
-  })
-  public async onQ(@Context() [interaction]: SlashCommandContext) {
-    // /q (no subcommand) => new question
-    const userId = interaction.user.id;
-    const channelId = interaction.channelId;
-    return this.sendQuiz(interaction, userId, channelId);
-  }
-
-  @Subcommand({
-    name: "help",
-    description: "Show quiz help",
-  })
-  public async onHelp(@Context() [interaction]: SlashCommandContext) {
-    return interaction.reply({
-      ephemeral: true,
-      content:
-        "**/q** → new quiz image\n" +
-        "**/q easy** → buttons mode (saved for you)\n" +
-        "**/q normal** → free-response mode (saved for you)\n" +
-        "**/qa guess:<species>** → answer (normal mode; fuzzy)\n" +
-        "**/q pool name:<standard|expanded>** → choose bird pool (saved for you)\n" +
-        "**/q skip** → reveal answer + new image\n" +
-        "**/q end** → reveal answer + stop\n",
-    });
-  }
-
-  @Subcommand({
-    name: "easy",
-    description: "Enable easy mode (buttons)",
-  })
-  public async onEasy(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "easy");
-    return interaction.reply({
-      ephemeral: true,
-      content: "✅ Easy mode enabled (buttons).",
-    });
-  }
-
-  @Subcommand({
-    name: "normal",
-    description: "Enable normal mode (free response)",
-  })
-  public async onNormal(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "normal");
-    return interaction.reply({
-      ephemeral: true,
-      content: "✅ Normal mode enabled (free response).",
-    });
-  }
-
-  @Subcommand({
-    name: "pool",
-    description: "Set which bird pool you quiz from",
-  })
-  public async onPool(
-    @Context() [interaction]: SlashCommandContext,
-    @Options() options: PoolDto,
-  ) {
-    USER_POOL.set(interaction.user.id, options.name);
-    return interaction.reply({
-      ephemeral: true,
-      content: `✅ Pool set to **${options.name}**.`,
-    });
-  }
-
-  @Subcommand({
-    name: "skip",
-    description: "Reveal answer and immediately show a new question",
-  })
-  public async onSkip(@Context() [interaction]: SlashCommandContext) {
-    const userId = interaction.user.id;
-    const channelId = interaction.channelId;
-
-    const st = ACTIVE_QUIZ.get(userId);
-    if (!st || st.channelId !== channelId) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "No active quiz in this channel. Use **/q** first.",
-      });
-    }
-
-    await interaction.reply({
-      ephemeral: false,
-      content: `⏭️ Skipped. Answer: **${st.correctName}**`,
-    });
-
-    ACTIVE_QUIZ.delete(userId);
-    return this.sendQuiz(interaction, userId, channelId);
-  }
-
-  @Subcommand({
-    name: "end",
-    description: "Reveal answer and end your current question",
-  })
-  public async onEnd(@Context() [interaction]: SlashCommandContext) {
-    const userId = interaction.user.id;
-    const channelId = interaction.channelId;
-
-    const st = ACTIVE_QUIZ.get(userId);
-    if (!st || st.channelId !== channelId) {
-      return interaction.reply({
-        ephemeral: true,
-        content: "No active quiz in this channel. Use **/q** first.",
-      });
-    }
-
-    await interaction.reply({
-      ephemeral: false,
-      content: `🛑 Ended. Answer: **${st.correctName}**`,
-    });
-
-    ACTIVE_QUIZ.delete(userId);
-    return;
-  }
-
-  // ---------------- quiz sender ----------------
-  private async sendQuiz(interaction: any, userId: string, channelId: string) {
+    // immediately show next question
+    // (reuse QCommand's logic by calling the same QuizService + building a new quiz here)
+    // We'll mimic sendQuiz safely:
     const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
-    const poolName: PoolName = USER_POOL.get(userId) ?? "standard";
+    const pool: PoolName = USER_POOL.get(userId) ?? "standard";
 
-    // safe defer (so we can call from /qa or /q skip after a reply)
-    try {
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply();
-      }
-    } catch {}
+    // safe follow-up: we already replied above
+    const ch: any = interaction.channel;
+    if (!ch || typeof ch.send !== "function") return;
 
-    const respond = async (payload: any) => {
-      if (interaction.deferred) return interaction.editReply(payload);
-      if (interaction.replied) return interaction.followUp(payload);
-      return interaction.reply(payload);
-    };
-
-    try {
-      const q = await this.quiz.buildQuiz(POOLS[poolName]);
-
-      const embed = new EmbedBuilder()
-        .setTitle(`Bird Quiz (${difficulty}, ${poolName} pool)`)
-        .setDescription(
-          difficulty === "easy"
-            ? "Which species is this? (buttons)"
-            : "Which species is this? (answer with **/qa guess:<species>**)",
-        )
-        .setImage(q.imageUrl)
-        .setFooter({ text: `Asset: ML${q.assetId}` });
-
-      if (difficulty === "easy") {
-        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-          q.choices.map((c) =>
-            new ButtonBuilder()
-              .setCustomId(`q_pick:${userId}:${c.code}`)
-              .setLabel(c.name)
-              .setStyle(ButtonStyle.Secondary),
-          ),
-        );
-
-        const msg = await respond({ embeds: [embed], components: [row] });
-
-        ACTIVE_QUIZ.set(userId, {
-          channelId,
-          messageId: msg.id,
-          easyMessageId: msg.id,
-          correctCode: q.correctCode,
-          correctName: q.correctName,
-          correctSlug: slugify(q.correctName),
-        });
-        return;
-      }
-
-      const msg = await respond({ embeds: [embed], components: [] });
-
-      ACTIVE_QUIZ.set(userId, {
-        channelId,
-        messageId: msg.id,
-        correctCode: q.correctCode,
-        correctName: q.correctName,
-        correctSlug: slugify(q.correctName),
-      });
-    } catch (err) {
-      console.error("[q] failed to build quiz:", err);
-      await respond({
-        content: "⚠️ I couldn’t generate a quiz image right now. Try again in a moment.",
-      });
-    }
-  }
-
-  // ---------------- button handler ----------------
-  @On("interactionCreate")
-  public async onInteraction(@Context() [interaction]: ContextOf<"interactionCreate">) {
-    if (!interaction.isButton()) return;
-
-    const bi = interaction as ButtonInteraction;
-    if (!bi.customId.startsWith("q_pick:")) return;
-
-    await bi.deferUpdate().catch(() => null);
-
-    const [, lockedUserId, chosenCode] = bi.customId.split(":");
-    const clickerId = bi.user.id;
-
-    if (clickerId !== lockedUserId) {
-      return bi.followUp({ ephemeral: true, content: "This quiz is for someone else." }).catch(() => null);
+    const q = await this.quiz.buildQuiz(POOLS[pool]).catch(() => null);
+    if (!q) {
+      await ch.send("⚠️ I couldn’t generate a new quiz image right now. Try **/q start**.").catch(() => null);
+      return;
     }
 
-    const st = ACTIVE_QUIZ.get(clickerId);
-    if (!st || st.easyMessageId !== bi.message.id) {
-      return bi.followUp({ ephemeral: true, content: "Quiz expired. Use **/q** again." }).catch(() => null);
-    }
+    const embed = new EmbedBuilder()
+      .setTitle(`Bird Quiz (${difficulty}, ${pool} pool)`)
+      .setDescription("Which species is this? (answer with /qa)")
+      .setImage(q.imageUrl)
+      .setFooter({ text: `Asset: ML${q.assetId}` });
 
-    const correct = chosenCode === st.correctCode;
+    const msg = await ch.send({ embeds: [embed] }).catch(() => null);
+    if (!msg) return;
 
-    if (correct) {
-      ACTIVE_QUIZ.delete(clickerId);
-      return bi
-        .followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` })
-        .catch(() => null);
-    }
-
-    return bi.followUp({ ephemeral: true, content: "❌ Not quite — try again." }).catch(() => null);
-  }
-
-  // ---------------- normal-mode type-in-chat (still supported) ----------------
-  @On("messageCreate")
-  public async onMessage(@Context() [msg]: ContextOf<"messageCreate">) {
-    if (!msg.author || msg.author.bot) return;
-
-    const userId = msg.author.id;
-    const st = ACTIVE_QUIZ.get(userId);
-    if (!st) return;
-
-    if (msg.channelId !== st.channelId) return;
-    if (st.easyMessageId) return;
-
-    const guess = slugify(msg.content);
-    if (!guess) return;
-
-    if (guess !== st.correctSlug) return;
-
-    ACTIVE_QUIZ.delete(userId);
-    await msg.reply(`✅ Correct! **${st.correctName}**`).catch(() => null);
+    ACTIVE_QUIZ.set(userId, {
+      channelId: ch.id,
+      messageId: msg.id,
+      correctCode: q.correctCode,
+      correctName: q.correctName,
+      correctSlug: slugify(q.correctName),
+      difficulty,
+      pool,
+    });
   }
 }

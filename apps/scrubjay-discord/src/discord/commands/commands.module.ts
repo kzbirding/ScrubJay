@@ -17,6 +17,7 @@ import { MeetupBoardService } from "./meetup/meetup.board.service";
 // ✅ NEW: Quiz
 import { QCommand } from "./q/q.command";
 import { QuizService } from "./q/q.service";
+import { QACommand } from "./q/q.command";
 
 @Module({
   imports: [
@@ -31,7 +32,7 @@ import { QuizService } from "./q/q.service";
     EbirdTaxonomyService,
     StatusCommand,
     BigdayCommand,
-
+    QACommand,
     MeetupCommands,
     MeetupBoardService,
 
