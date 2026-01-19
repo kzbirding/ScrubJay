@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { EbirdTaxonomyService, type TaxonEntry } from "../ebird-taxonomy.service";
-import { SOCAL_COMMON_NAMES } from "../q/socal.names";
+import { STANDARD_POOL } from "./standard.pool";
 
 function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -108,7 +108,7 @@ export class QuizService {
     throw new Error(`No Macaulay asset id found via media.ebird.org catalog (taxonCode=${taxonCode})`);
   }
 
-  // ✅ NEW: request another random photo for a specific speciesCode
+  // request another random photo for a specific speciesCode
   public async getPhotoForSpeciesCode(
     speciesCode: string,
   ): Promise<{ assetId: string; imageUrl: string }> {
@@ -116,7 +116,9 @@ export class QuizService {
     return this.getRandomMacaulayPhotoFromEbirdCatalog(speciesCode);
   }
 
-  public async buildQuiz(): Promise<{
+  public async buildQuiz(
+    pool: readonly string[] = STANDARD_POOL,
+  ): Promise<{
     correctCode: string;
     correctName: string;
     choices: { code: string; name: string }[];
@@ -131,10 +133,10 @@ export class QuizService {
       let correctEntry: TaxonEntry | null = null;
 
       for (let i = 0; i < 30 && !correctEntry; i++) {
-        correctEntry = this.resolveCommonName(pickRandom(SOCAL_COMMON_NAMES));
+        correctEntry = this.resolveCommonName(pickRandom(pool));
       }
       if (!correctEntry) {
-        throw new Error("Could not resolve any SoCal common names to eBird species (check SOCAL_COMMON_NAMES)");
+        throw new Error("Could not resolve any pool common names to eBird species");
       }
 
       const correctCode = correctEntry.speciesCode;
@@ -147,7 +149,7 @@ export class QuizService {
         const seenCodes = new Set<string>([correctCode]);
 
         const candidates = shuffle(
-          SOCAL_COMMON_NAMES.filter(
+          pool.filter(
             (n) => n.toLowerCase().trim() !== correctName.toLowerCase().trim(),
           ),
         );
@@ -164,7 +166,7 @@ export class QuizService {
 
         if (distractors.length < 3) {
           throw new Error(
-            `Not enough valid distractors (need 3, got ${distractors.length}). Add more names to SOCAL_COMMON_NAMES.`,
+            `Not enough valid distractors (need 3, got ${distractors.length}). Add more names to the selected pool.`,
           );
         }
 
