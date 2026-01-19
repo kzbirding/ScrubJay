@@ -5,43 +5,34 @@ import {
   ButtonStyle,
   EmbedBuilder,
   type ButtonInteraction,
+  type Message,
 } from "discord.js";
 import {
   Context,
   On,
   Options,
+  SlashCommand,
   StringOption,
-  Subcommand,
   type ContextOf,
   type SlashCommandContext,
 } from "necord";
+import { QuizService } from "../q/q.service";
 
-import { QCmd } from "./q.decorator";
-import { QuizService } from "./q.service";
-import { STANDARD_POOL } from "./standard.pool";
-import { EXPANDED_POOL } from "./expanded.pool";
-
+// ---- per-user difficulty (resets on restart) ----
 type Difficulty = "easy" | "normal";
 const USER_DIFFICULTY = new Map<string, Difficulty>();
 
-type PoolName = "standard" | "expanded";
-const USER_POOL = new Map<string, PoolName>();
-const POOLS: Record<PoolName, readonly string[]> = {
-  standard: STANDARD_POOL,
-  expanded: EXPANDED_POOL,
-};
-
+// ---- per-user active quiz state (resets on restart) ----
 type ActiveQuiz = {
   channelId: string;
   messageId: string;
   correctCode: string;
   correctName: string;
   correctSlug: string;
-  difficulty: Difficulty;
-  pool: PoolName;
+  // if set, this quiz used buttons
   easyMessageId?: string;
 };
-const ACTIVE_QUIZ = new Map<string, ActiveQuiz>();
+const ACTIVE_QUIZ = new Map<string, ActiveQuiz>(); // userId -> quiz
 
 function slugify(s: string): string {
   return (s || "")
@@ -53,17 +44,55 @@ function slugify(s: string): string {
     .trim();
 }
 
-class QPoolDto {
+// Levenshtein distance for fuzzy matching (normal mode /qa)
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost,
+      );
+    }
+  }
+  return dp[m][n];
+}
+
+function similarity(a: string, b: string): number {
+  const A = slugify(a);
+  const B = slugify(b);
+  const denom = Math.max(A.length, B.length);
+  if (denom === 0) return 0;
+  return 1 - levenshtein(A, B) / denom;
+}
+
+type QAction = "ask" | "easy" | "normal" | "skip" | "end" | "help";
+
+class QDto {
   @StringOption({
-    name: "name",
-    description: "Which pool to use for future questions",
-    required: true,
+    name: "action",
+    description: "Choose what to do",
+    required: false,
     choices: [
-      { name: "standard", value: "standard" },
-      { name: "expanded", value: "expanded" },
+      { name: "ask (new question)", value: "ask" },
+      { name: "easy (buttons)", value: "easy" },
+      { name: "normal (free response)", value: "normal" },
+      { name: "skip (reveal + new)", value: "skip" },
+      { name: "end (reveal + stop)", value: "end" },
+      { name: "help", value: "help" },
     ],
   })
-  name!: PoolName;
+  action?: QAction;
 }
 
 class QaDto {
@@ -76,149 +105,131 @@ class QaDto {
 }
 
 @Injectable()
-@QCmd()
 export class QCommand {
   constructor(private readonly quiz: QuizService) {}
 
-  // /q help
-  @Subcommand({ name: "help", description: "Show quiz commands" })
-  public async onHelp(@Context() [interaction]: SlashCommandContext) {
-    return interaction.reply({
-      ephemeral: true,
-      content:
-        "**/q start** → new quiz\n" +
-        "**/q easy** → buttons mode\n" +
-        "**/q normal** → free response mode\n" +
-        "**/q pool name:<standard|expanded>** → set pool for future questions\n" +
-        "**/qa guess:<species>** → answer\n" +
-        "**/q photo** → another photo\n" +
-        "**/q hint** → first letter (normal only)\n" +
-        "**/q skip** → reveal + new\n" +
-        "**/q end** → reveal + stop",
-    });
-  }
-
-  // /q pool
-  @Subcommand({ name: "pool", description: "Set your bird pool (applies next question)" })
-  public async onPool(
+  @SlashCommand({
+    name: "qa",
+    description: "Answer your current quiz",
+  })
+  public async onQa(
     @Context() [interaction]: SlashCommandContext,
-    @Options() options: QPoolDto,
+    @Options() options: QaDto,
   ) {
-    USER_POOL.set(interaction.user.id, options.name);
-    return interaction.reply({
-      ephemeral: true,
-      content: `✅ Pool set to **${options.name}** (applies starting your next question).`,
-    });
-  }
-
-  // /q easy
-  @Subcommand({ name: "easy", description: "Set easy mode (buttons)" })
-  public async onEasy(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "easy");
-    return interaction.reply({ ephemeral: true, content: "✅ Easy mode enabled (buttons)." });
-  }
-
-  // /q normal
-  @Subcommand({ name: "normal", description: "Set normal mode (free response)" })
-  public async onNormal(@Context() [interaction]: SlashCommandContext) {
-    USER_DIFFICULTY.set(interaction.user.id, "normal");
-    return interaction.reply({ ephemeral: true, content: "✅ Normal mode enabled (free response)." });
-  }
-
-  // /q hint
-  @Subcommand({ name: "hint", description: "Get a hint (normal mode only)" })
-  public async onHint(@Context() [interaction]: SlashCommandContext) {
     const userId = interaction.user.id;
-    const st = ACTIVE_QUIZ.get(userId);
+    const channelId = interaction.channelId;
 
-    if (!st || st.channelId !== interaction.channelId) {
-      return interaction.reply({ ephemeral: true, content: "No active quiz here." });
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st || st.channelId !== channelId) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "No active quiz in this channel. Use **/q** first.",
+      });
     }
+
+    // /qa is intended for normal mode
     if (st.easyMessageId) {
       return interaction.reply({
         ephemeral: true,
-        content: "Hints are only available in **normal mode**.",
+        content: "This question is in **easy mode** (buttons). Use the buttons to answer.",
       });
     }
 
-    return interaction.reply({
-      ephemeral: true,
-      content: `💡 Starts with **${st.correctName[0].toUpperCase()}**`,
+    const guessRaw = options.guess ?? "";
+    const guess = slugify(guessRaw);
+    if (!guess) {
+      return interaction.reply({
+        ephemeral: true,
+        content: "Type a guess like: **/qa guess:Anna's Hummingbird**",
+      });
+    }
+
+    // ✅ fuzzy: accept exact OR >= 0.8 similarity (punctuation discounted via slugify)
+    const exact = guess === st.correctSlug;
+    const sim = similarity(guessRaw, st.correctName);
+    const ok = exact || (guess.length >= 4 && sim >= 0.8);
+
+    if (!ok) {
+      return interaction.reply({ ephemeral: true, content: "❌ Not quite." });
+    }
+
+    ACTIVE_QUIZ.delete(userId);
+    await interaction.reply({
+      ephemeral: false,
+      content: `✅ Correct! **${st.correctName}**`,
     });
+
+    // Show next question right away
+    return this.sendQuiz(interaction, userId, channelId);
   }
 
-  // /q photo
-  @Subcommand({ name: "photo", description: "Get another photo of the current species" })
-  public async onPhoto(@Context() [interaction]: SlashCommandContext) {
+  @SlashCommand({
+    name: "q",
+    description: "Bird quiz (easy buttons or normal free response)",
+  })
+  public async onQ(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() options: QDto,
+  ) {
     const userId = interaction.user.id;
-    const st = ACTIVE_QUIZ.get(userId);
+    const channelId = interaction.channelId;
 
-    if (!st || st.channelId !== interaction.channelId) {
-      return interaction.reply({ ephemeral: true, content: "No active quiz here." });
-    }
+    const action: QAction = (options?.action ?? "ask") as QAction;
 
-    await interaction.reply({ ephemeral: true, content: "📸 Getting another photo..." });
-    return this.sendAnotherPhoto(interaction, userId, st);
-  }
-
-  // /q skip
-  @Subcommand({ name: "skip", description: "Reveal answer and start a new question" })
-  public async onSkip(@Context() [interaction]: SlashCommandContext) {
-    const userId = interaction.user.id;
-    const st = ACTIVE_QUIZ.get(userId);
-
-    if (!st || st.channelId !== interaction.channelId) {
-      return interaction.reply({ ephemeral: true, content: "No active quiz here." });
-    }
-
-    await interaction.reply({ content: `⏭️ Skipped. Answer: **${st.correctName}**` });
-    ACTIVE_QUIZ.delete(userId);
-    return this.sendQuiz(interaction, userId, interaction.channelId);
-  }
-
-  // /q end
-  @Subcommand({ name: "end", description: "Reveal answer and end your quiz" })
-  public async onEnd(@Context() [interaction]: SlashCommandContext) {
-    const userId = interaction.user.id;
-    const st = ACTIVE_QUIZ.get(userId);
-
-    if (!st || st.channelId !== interaction.channelId) {
-      return interaction.reply({ ephemeral: true, content: "No active quiz here." });
-    }
-
-    await interaction.reply({ content: `🛑 Ended. Answer: **${st.correctName}**` });
-    ACTIVE_QUIZ.delete(userId);
-    return;
-  }
-
-  // /q start
-  @Subcommand({ name: "start", description: "Start a new quiz question" })
-  public async onStart(@Context() [interaction]: SlashCommandContext) {
-    const userId = interaction.user.id;
-    const st = ACTIVE_QUIZ.get(userId);
-
-    if (st && st.channelId === interaction.channelId) {
+    if (action === "help") {
       return interaction.reply({
         ephemeral: true,
         content:
-          "You already have an active quiz.\n" +
-          "Use **/qa**, **/q photo**, **/q skip**, or **/q end**.",
+          "**/q** → new quiz image\n" +
+          "**/q action:easy** → buttons mode (saved for you)\n" +
+          "**/q action:normal** → free-response mode (saved for you)\n" +
+          "**/qa guess:<species>** → answer (normal mode)\n" +
+          "**/q action:skip** → reveal answer + new image\n" +
+          "**/q action:end** → reveal answer + stop\n",
       });
     }
 
-    return this.sendQuiz(interaction, userId, interaction.channelId);
+    if (action === "easy" || action === "normal") {
+      USER_DIFFICULTY.set(userId, action);
+      return interaction.reply({
+        ephemeral: true,
+        content:
+          action === "easy"
+            ? "✅ Easy mode enabled (buttons). Use **/q** to get a question."
+            : "✅ Normal mode enabled (type your guess in chat). Use **/q** to get a question.",
+      });
+    }
+
+    if (action === "skip" || action === "end") {
+      const st = ACTIVE_QUIZ.get(userId);
+      if (!st || st.channelId !== channelId) {
+        return interaction.reply({
+          ephemeral: true,
+          content: "No active quiz in this channel. Use **/q** first.",
+        });
+      }
+
+      await interaction.reply({
+        ephemeral: false,
+        content: `✅ Answer: **${st.correctName}**`,
+      });
+
+      ACTIVE_QUIZ.delete(userId);
+
+      if (action === "end") return;
+      return this.sendQuiz(interaction, userId, channelId);
+    }
+
+    // default: ask
+    return this.sendQuiz(interaction, userId, channelId);
   }
 
-   // ---------- quiz sender ----------
   private async sendQuiz(interaction: any, userId: string, channelId: string) {
-    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
-    const pool: PoolName = USER_POOL.get(userId) ?? "standard";
+    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "easy";
 
-    try {
-      if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply();
-      }
-    } catch {}
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
 
     const respond = async (payload: any) => {
       if (interaction.deferred) return interaction.editReply(payload);
@@ -226,69 +237,61 @@ export class QCommand {
       return interaction.reply(payload);
     };
 
-    const q = await this.quiz.buildQuiz(POOLS[pool]);
+    try {
+      const q = await this.quiz.buildQuiz();
 
-    const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${difficulty}, ${pool} pool)`)
-      .setDescription(
-        difficulty === "easy"
-          ? "Which species is this?"
-          : "Which species is this? (answer with /qa)",
-      )
-      .setImage(q.imageUrl)
-      .setFooter({ text: `Asset: ML${q.assetId}` });
+      const embed = new EmbedBuilder()
+        .setTitle("Bird Quiz")
+        .setDescription(
+          difficulty === "easy"
+            ? "Which species is this? (buttons)"
+            : "Which species is this? (type your guess in chat)",
+        )
+        .setImage(q.imageUrl)
+        .setFooter({ text: `Asset: ML${q.assetId}` });
 
-    if (difficulty === "easy") {
-      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-        q.choices.map((c) =>
-          new ButtonBuilder()
-            .setCustomId(`q_pick:${userId}:${c.code}`)
-            .setLabel(c.name)
-            .setStyle(ButtonStyle.Secondary),
-        ),
-      );
+      if (difficulty === "easy") {
+        const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          q.choices.map((c) =>
+            new ButtonBuilder()
+              .setCustomId(`q_pick:${userId}:${c.code}`) // lock to user
+              .setLabel(c.name)
+              .setStyle(ButtonStyle.Secondary),
+          ),
+        );
 
-      const msg = await respond({ embeds: [embed], components: [row] });
+        const msg = await respond({ embeds: [embed], components: [row] });
+
+        ACTIVE_QUIZ.set(userId, {
+          channelId,
+          messageId: msg.id,
+          easyMessageId: msg.id,
+          correctCode: q.correctCode,
+          correctName: q.correctName,
+          correctSlug: slugify(q.correctName),
+        });
+        return;
+      }
+
+      // normal mode: no buttons
+      const msg = await respond({ embeds: [embed], components: [] });
+
       ACTIVE_QUIZ.set(userId, {
         channelId,
         messageId: msg.id,
-        easyMessageId: msg.id,
         correctCode: q.correctCode,
         correctName: q.correctName,
         correctSlug: slugify(q.correctName),
-        difficulty,
-        pool,
       });
-      return;
+    } catch (err) {
+      console.error("[q] failed to build quiz:", err);
+      await respond({
+        content: "⚠️ I couldn’t generate a quiz image right now. Try again in a moment.",
+      });
     }
-
-    const msg = await respond({ embeds: [embed] });
-    ACTIVE_QUIZ.set(userId, {
-      channelId,
-      messageId: msg.id,
-      correctCode: q.correctCode,
-      correctName: q.correctName,
-      correctSlug: slugify(q.correctName),
-      difficulty,
-      pool,
-    });
   }
 
-  private async sendAnotherPhoto(interaction: any, userId: string, st: ActiveQuiz) {
-    const ch: any = interaction.channel;
-    if (!ch || typeof ch.send !== "function") return;
-
-    const { imageUrl, assetId } = await this.quiz.getPhotoForSpeciesCode(st.correctCode);
-
-    const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
-      .setImage(imageUrl)
-      .setFooter({ text: `Asset: ML${assetId}` });
-
-    const msg = await ch.send({ embeds: [embed] });
-    ACTIVE_QUIZ.set(userId, { ...st, messageId: msg.id });
-  }
-
+  // ✅ Button handler with correct Necord context typing
   @On("interactionCreate")
   public async onInteraction(@Context() [interaction]: ContextOf<"interactionCreate">) {
     if (!interaction.isButton()) return;
@@ -296,66 +299,52 @@ export class QCommand {
     const bi = interaction as ButtonInteraction;
     if (!bi.customId.startsWith("q_pick:")) return;
 
+    // ACK immediately to prevent “This interaction failed”
     await bi.deferUpdate().catch(() => null);
 
     const [, lockedUserId, chosenCode] = bi.customId.split(":");
-    if (bi.user.id !== lockedUserId) {
-      return bi.followUp({ ephemeral: true, content: "This quiz is for someone else." });
+    const clickerId = bi.user.id;
+
+    if (clickerId !== lockedUserId) {
+      return bi.followUp({ ephemeral: true, content: "This quiz is for someone else." }).catch(() => null);
     }
 
-    const st = ACTIVE_QUIZ.get(lockedUserId);
+    const st = ACTIVE_QUIZ.get(clickerId);
     if (!st || st.easyMessageId !== bi.message.id) {
-      return bi.followUp({ ephemeral: true, content: "Quiz expired." });
+      return bi.followUp({ ephemeral: true, content: "Quiz expired. Use **/q** again." }).catch(() => null);
     }
 
-    if (chosenCode !== st.correctCode) {
-      return bi.followUp({ ephemeral: true, content: "❌ Not quite." });
+    const correct = chosenCode === st.correctCode;
+
+    if (correct) {
+      ACTIVE_QUIZ.delete(clickerId);
+      return bi.followUp({ ephemeral: true, content: `✅ Correct! **${st.correctName}**` }).catch(() => null);
     }
 
-    ACTIVE_QUIZ.delete(lockedUserId);
+    return bi.followUp({ ephemeral: true, content: "❌ Not quite — try again." }).catch(() => null);
+  }
 
-    await bi
-      .followUp({ ephemeral: false, content: `✅ Correct! **${st.correctName}**` })
-      .catch(() => null);
+  // ✅ Normal mode: free-response guesses
+  @On("messageCreate")
+  public async onMessage(@Context() [msg]: ContextOf<"messageCreate">) {
+    if (!msg.author || msg.author.bot) return;
 
-    const ch: any = bi.channel;
-    if (!ch || typeof ch.send !== "function") return;
+    const userId = msg.author.id;
+    const st = ACTIVE_QUIZ.get(userId);
+    if (!st) return;
 
-    const q = await this.quiz.buildQuiz(POOLS[st.pool]).catch(() => null);
-    if (!q) {
-      await ch
-        .send("⚠️ I couldn’t generate a new quiz image right now. Try **/q start** again.")
-        .catch(() => null);
-      return;
-    }
+    // only accept guesses in same channel
+    if (msg.channelId !== st.channelId) return;
 
-    const embed = new EmbedBuilder()
-      .setTitle(`Bird Quiz (${st.difficulty}, ${st.pool} pool)`)
-      .setDescription("Which species is this? (buttons)")
-      .setImage(q.imageUrl)
-      .setFooter({ text: `Asset: ML${q.assetId}` });
+    // only normal mode quizzes (no buttons)
+    if (st.easyMessageId) return;
 
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      q.choices.map((c) =>
-        new ButtonBuilder()
-          .setCustomId(`q_pick:${lockedUserId}:${c.code}`)
-          .setLabel(c.name)
-          .setStyle(ButtonStyle.Secondary),
-      ),
-    );
+    const guess = slugify(msg.content);
+    if (!guess) return;
 
-    const msg = await ch.send({ embeds: [embed], components: [row] }).catch(() => null);
-    if (!msg) return;
+    if (guess !== st.correctSlug) return;
 
-    ACTIVE_QUIZ.set(lockedUserId, {
-      channelId: ch.id,
-      messageId: msg.id,
-      easyMessageId: msg.id,
-      correctCode: q.correctCode,
-      correctName: q.correctName,
-      correctSlug: slugify(q.correctName),
-      difficulty: st.difficulty,
-      pool: st.pool,
-    });
+    ACTIVE_QUIZ.delete(userId);
+    await msg.reply(`✅ Correct! **${st.correctName}**`).catch(() => null);
   }
 }
