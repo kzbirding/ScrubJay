@@ -28,7 +28,6 @@ export class QuizService {
   private extractAssetIdsFromHtml(html: string): string[] {
     const ids = new Set<string>();
 
-    // Cornell CDN URLs
     {
       const re =
         /https:\/\/cdn\.download\.ams\.birds\.cornell\.edu\/api\/v1\/asset\/(\d{6,})(?:\/\d+)?/gi;
@@ -38,7 +37,6 @@ export class QuizService {
       }
     }
 
-    // ML######## in HTML
     {
       const re = /\bML(\d{6,})\b/gi;
       let m: RegExpExecArray | null;
@@ -47,7 +45,6 @@ export class QuizService {
       }
     }
 
-    // direct asset links
     {
       const re = /macaulaylibrary\.org\/asset\/(\d{6,})\b/gi;
       let m: RegExpExecArray | null;
@@ -96,7 +93,6 @@ export class QuizService {
       return { assetId, imageUrl };
     }
 
-    // fallback page 1
     const html = await this.fetchCatalogPage(taxonCode, 1);
     const ids = this.extractAssetIdsFromHtml(html);
     if (ids.length > 0) {
@@ -110,7 +106,6 @@ export class QuizService {
     );
   }
 
-  // ✅ request another random photo for a specific speciesCode
   public async getPhotoForSpeciesCode(
     speciesCode: string,
   ): Promise<{ assetId: string; imageUrl: string }> {
@@ -118,7 +113,7 @@ export class QuizService {
     return this.getRandomMacaulayPhotoFromEbirdCatalog(speciesCode);
   }
 
-  // ✅ pool support (defaults to STANDARD_POOL)
+  // ✅ Pool-aware buildQuiz (defaults to STANDARD_POOL)
   public async buildQuiz(pool: readonly string[] = STANDARD_POOL): Promise<{
     correctCode: string;
     correctName: string;
@@ -136,9 +131,7 @@ export class QuizService {
       for (let i = 0; i < 30 && !correctEntry; i++) {
         correctEntry = this.resolveCommonName(pickRandom(pool));
       }
-      if (!correctEntry) {
-        throw new Error("Could not resolve any pool common names to eBird species");
-      }
+      if (!correctEntry) throw new Error("Could not resolve any pool common names to eBird species");
 
       const correctCode = correctEntry.speciesCode;
       const correctName = correctEntry.comName;
