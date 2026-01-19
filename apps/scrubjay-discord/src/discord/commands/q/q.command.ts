@@ -17,10 +17,20 @@ import {
   type SlashCommandContext,
 } from "necord";
 import { QuizService } from "../q/q.service";
+import { STANDARD_POOL } from "./standard.pool";
+import { EXPANDED_POOL } from "./expanded.pool";
 
 // ---- per-user difficulty (resets on restart) ----
 type Difficulty = "easy" | "normal";
 const USER_DIFFICULTY = new Map<string, Difficulty>();
+
+type PoolName = "standard" | "expanded";
+const USER_POOL = new Map<string, PoolName>();
+
+const POOLS: Record<PoolName, readonly string[]> = {
+  standard: STANDARD_POOL,
+  expanded: EXPANDED_POOL,
+};
 
 // ---- per-user active quiz state (resets on restart) ----
 type ActiveQuiz = {
@@ -44,20 +54,26 @@ function slugify(s: string): string {
     .trim();
 }
 
-// Levenshtein distance for fuzzy matching (normal mode /qa)
+// --- fuzzy matching helpers for /qa ---
 function levenshtein(a: string, b: string): number {
-  const m = a.length;
-  const n = b.length;
+  const A = slugify(a);
+  const B = slugify(b);
+
+  const m = A.length;
+  const n = B.length;
   if (m === 0) return n;
   if (n === 0) return m;
 
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array<number>(n + 1).fill(0),
+  );
+
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
 
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const cost = A[i - 1] === B[j - 1] ? 0 : 1;
       dp[i][j] = Math.min(
         dp[i - 1][j] + 1,
         dp[i][j - 1] + 1,
@@ -65,6 +81,7 @@ function levenshtein(a: string, b: string): number {
       );
     }
   }
+
   return dp[m][n];
 }
 
@@ -73,7 +90,7 @@ function similarity(a: string, b: string): number {
   const B = slugify(b);
   const denom = Math.max(A.length, B.length);
   if (denom === 0) return 0;
-  return 1 - levenshtein(A, B) / denom;
+  return 1 - levenshtein(a, b) / denom;
 }
 
 type QAction = "ask" | "easy" | "normal" | "skip" | "end" | "help";
@@ -93,6 +110,17 @@ class QDto {
     ],
   })
   action?: QAction;
+
+  @StringOption({
+    name: "pool",
+    description: "Choose which bird pool to quiz from (saved for you)",
+    required: false,
+    choices: [
+      { name: "standard", value: "standard" },
+      { name: "expanded", value: "expanded" },
+    ],
+  })
+  pool?: PoolName;
 }
 
 class QaDto {
@@ -110,7 +138,7 @@ export class QCommand {
 
   @SlashCommand({
     name: "qa",
-    description: "Answer your current quiz",
+    description: "Answer your current quiz (normal mode)",
   })
   public async onQa(
     @Context() [interaction]: SlashCommandContext,
@@ -127,7 +155,7 @@ export class QCommand {
       });
     }
 
-    // /qa is intended for normal mode
+    // /qa is for normal mode (easy mode uses buttons)
     if (st.easyMessageId) {
       return interaction.reply({
         ephemeral: true,
@@ -135,31 +163,32 @@ export class QCommand {
       });
     }
 
-    const guessRaw = options.guess ?? "";
-    const guess = slugify(guessRaw);
-    if (!guess) {
+    const guessRaw = options?.guess ?? "";
+    const guessSlug = slugify(guessRaw);
+    if (!guessSlug) {
       return interaction.reply({
         ephemeral: true,
         content: "Type a guess like: **/qa guess:Anna's Hummingbird**",
       });
     }
 
-    // ✅ fuzzy: accept exact OR >= 0.8 similarity (punctuation discounted via slugify)
-    const exact = guess === st.correctSlug;
+    const exact = guessSlug === st.correctSlug;
     const sim = similarity(guessRaw, st.correctName);
-    const ok = exact || (guess.length >= 4 && sim >= 0.8);
+    const ok = exact || (guessSlug.length >= 4 && sim >= 0.8);
 
     if (!ok) {
       return interaction.reply({ ephemeral: true, content: "❌ Not quite." });
     }
 
+    // correct
     ACTIVE_QUIZ.delete(userId);
+
+    // announce correct, then immediately show next question
     await interaction.reply({
       ephemeral: false,
       content: `✅ Correct! **${st.correctName}**`,
     });
 
-    // Show next question right away
     return this.sendQuiz(interaction, userId, channelId);
   }
 
@@ -176,6 +205,15 @@ export class QCommand {
 
     const action: QAction = (options?.action ?? "ask") as QAction;
 
+    // pool selection (saved per user; resets on restart)
+    if (options?.pool) {
+      USER_POOL.set(userId, options.pool);
+      return interaction.reply({
+        ephemeral: true,
+        content: `✅ Pool set to **${options.pool}**.`,
+      });
+    }
+
     if (action === "help") {
       return interaction.reply({
         ephemeral: true,
@@ -183,7 +221,8 @@ export class QCommand {
           "**/q** → new quiz image\n" +
           "**/q action:easy** → buttons mode (saved for you)\n" +
           "**/q action:normal** → free-response mode (saved for you)\n" +
-          "**/qa guess:<species>** → answer (normal mode)\n" +
+          "**/qa guess:<species>** → answer (normal mode; fuzzy)\n" +
+          "**/q pool:<standard|expanded>** → choose bird pool (saved for you)\n" +
           "**/q action:skip** → reveal answer + new image\n" +
           "**/q action:end** → reveal answer + stop\n",
       });
@@ -225,10 +264,16 @@ export class QCommand {
   }
 
   private async sendQuiz(interaction: any, userId: string, channelId: string) {
-    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "easy";
+    const difficulty: Difficulty = USER_DIFFICULTY.get(userId) ?? "normal";
+    const poolName: PoolName = USER_POOL.get(userId) ?? "standard";
 
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
+    // ✅ Minimal safety: only defer if we haven't replied/deferred already
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply();
+      }
+    } catch {
+      // ignore (prevents InteractionAlreadyReplied crashes)
     }
 
     const respond = async (payload: any) => {
@@ -238,14 +283,14 @@ export class QCommand {
     };
 
     try {
-      const q = await this.quiz.buildQuiz();
+      const q = await this.quiz.buildQuiz(POOLS[poolName]);
 
       const embed = new EmbedBuilder()
-        .setTitle("Bird Quiz")
+        .setTitle(`Bird Quiz (${difficulty}, ${poolName} pool)`)
         .setDescription(
           difficulty === "easy"
             ? "Which species is this? (buttons)"
-            : "Which species is this? (type your guess in chat)",
+            : "Which species is this? (answer with **/qa guess:<species>**)",
         )
         .setImage(q.imageUrl)
         .setFooter({ text: `Asset: ML${q.assetId}` });
@@ -324,7 +369,7 @@ export class QCommand {
     return bi.followUp({ ephemeral: true, content: "❌ Not quite — try again." }).catch(() => null);
   }
 
-  // ✅ Normal mode: free-response guesses
+  // ✅ Normal mode: free-response guesses (still supported)
   @On("messageCreate")
   public async onMessage(@Context() [msg]: ContextOf<"messageCreate">) {
     if (!msg.author || msg.author.bot) return;
