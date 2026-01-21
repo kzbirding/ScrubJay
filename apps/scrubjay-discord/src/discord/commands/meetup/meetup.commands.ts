@@ -1351,51 +1351,66 @@ public async onReady([client]: [any]) {
 }
 
 
-  @Subcommand({
-    name: "alerts",
-    description: "Toggle meetup alerts role on/off",
-  })
-  public async onAlerts(
-    @Context() [interaction]: SlashCommandContext,
-  ) {
-    await interaction.deferReply({ ephemeral: true });
+ @Subcommand({
+  name: "alerts",
+  description: "Toggle meetup alerts role on/off",
+})
+public async onAlerts(@Context() [interaction]: SlashCommandContext) {
+  await interaction.deferReply({ ephemeral: true });
 
-    const roleId = process.env.MEETUP_ALERTS_ROLE_ID;
-    if (!roleId) {
-      return interaction.editReply(
-        "MEETUP_ALERTS_ROLE_ID is not set (Railway env var missing).",
-      );
-    }
-
-    if (!interaction.guild) {
-      return interaction.editReply("This command can only be used in a server.");
-    }
-
-    // Fetch member reliably (cache-safe)
-    const member = await interaction.guild.members
-      .fetch(interaction.user.id)
-      .catch(() => null);
-
-    if (!member) {
-      return interaction.editReply("Couldn’t find your server member record.");
-    }
-
-    const hasRole = member.roles.cache.has(roleId);
-
-    try {
-      if (!hasRole) {
-        await member.roles.add(roleId, "User toggled meetup alerts on");
-        return interaction.editReply("Meetup alerts toggled on ✅");
-      } else {
-        await member.roles.remove(roleId, "User toggled meetup alerts off");
-        return interaction.editReply("Meetup alerts toggled off ❌");
-      }
-    } catch {
-      return interaction.editReply(
-        "I couldn’t change that role. (Bot likely needs **Manage Roles** and its role must be above the meetup-alerts role.)",
-      );
-    }
+  const allowedChannelId = process.env.MEETUP_CHANNEL_ID;
+  if (!allowedChannelId) {
+    return interaction.editReply(
+      "MEETUP_CHANNEL_ID is not set (Railway env var missing).",
+    );
   }
+
+  const ch: any = interaction.channel;
+  const isAllowed =
+    interaction.channelId === allowedChannelId ||
+    (ch?.isThread?.() && ch?.parentId === allowedChannelId);
+
+  if (!isAllowed) {
+    return interaction.editReply("Run this command in #meetups.");
+  }
+
+  const roleId = process.env.MEETUP_ALERTS_ROLE_ID;
+  if (!roleId) {
+    return interaction.editReply(
+      "MEETUP_ALERTS_ROLE_ID is not set (Railway env var missing).",
+    );
+  }
+
+  if (!interaction.guild) {
+    return interaction.editReply("This command can only be used in a server.");
+  }
+
+  const member = await interaction.guild.members
+    .fetch(interaction.user.id)
+    .catch(() => null);
+
+  if (!member) {
+    return interaction.editReply("Couldn’t find your server member record.");
+  }
+
+  const hasRole = member.roles.cache.has(roleId);
+
+  try {
+    if (!hasRole) {
+      await member.roles.add(roleId, "User toggled meetup alerts on");
+      return interaction.editReply("Meetup alerts toggled on ✅");
+    } else {
+      await member.roles.remove(roleId, "User toggled meetup alerts off");
+      return interaction.editReply("Meetup alerts toggled off ❌");
+    }
+  } catch {
+    return interaction.editReply(
+      "I couldn’t change that role. (Bot likely needs **Manage Roles** and its role must be above the meetup-alerts role.)",
+    );
+  }
+}
+
+
 
 
 
