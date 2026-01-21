@@ -43,6 +43,9 @@ export class MeetupBoardService {
   private meetupsById = new Map<string, StoredMeetup>();
   private meetupIdByThreadId = new Map<string, string>();
 
+  // Derived per rebuild; not persisted. Used only for board display.
+  private attendanceCountByThreadId = new Map<string, number>();
+
   public upsert(meetup: StoredMeetup) {
     this.meetupsById.set(meetup.id, meetup);
     this.meetupIdByThreadId.set(meetup.threadId, meetup.id);
@@ -84,6 +87,7 @@ export class MeetupBoardService {
     // Reset memory
     this.meetupsById.clear();
     this.meetupIdByThreadId.clear();
+    this.attendanceCountByThreadId.clear();
 
     // Active threads
     const active = await parent.threads.fetchActive();
@@ -115,6 +119,12 @@ export class MeetupBoardService {
       // ✅ Identify meetups by pinned ScrubJay tags (cheapest, never misses)
       const isMeetup = await this.threadHasScrubJayPins(thread);
       if (!isMeetup) continue;
+
+      // Attendance count (best effort)
+      const goingCount = await this.getAttendanceGoingCount(thread);
+      if (Number.isFinite(goingCount) && goingCount >= 0) {
+        this.attendanceCountByThreadId.set(thread.id, goingCount);
+      }
 
       // Starter message is the parent message. It may exist and contains details.
       const starterMsg = await thread.fetchStarterMessage().catch(() => null);
@@ -201,7 +211,9 @@ export class MeetupBoardService {
 
     for (const m of ongoing) {
       const when = m.startUnix ? `<t:${m.startUnix}:f>` : "(time unknown)";
-      lines.push(`• ${when} — ${m.title} (${m.location})`);
+      const going = this.attendanceCountByThreadId.get(m.threadId);
+      const goingStr = typeof going === "number" ? ` — 👥 ${going}` : "";
+      lines.push(`• ${when} — ${m.title} (${m.location})${goingStr}`);
       lines.push(`  ${m.threadUrl}`);
       lines.push("");
     }
@@ -243,6 +255,38 @@ export class MeetupBoardService {
       return false;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Best-effort parse of the pinned attendance message.
+   * Prefer the explicit header count: "Going (N)".
+   * Fallback: count bullet mentions.
+   */
+  private async getAttendanceGoingCount(thread: ThreadChannel): Promise<number> {
+    try {
+      const pinned = await thread.messages.fetchPinned().catch(() => null);
+      if (!pinned) return -1;
+
+      const msg = pinned.find((m) => (m.content ?? "").includes(ATTENDANCE_TAG));
+      if (!msg) return -1;
+
+      const text = msg.content ?? "";
+
+      // Header format from MeetupCommands: "👥 **Going (N)**"
+      const m = text.match(/Going\s*\((\d+)\)/i);
+      if (m?.[1]) return Number(m[1]);
+
+      // Fallback: count bullet mentions
+      const bulletMentions = (text.match(/^\s*•\s*<@\d+>/gm) ?? []).length;
+      if (bulletMentions) return bulletMentions;
+
+      // If message exists but has "(No one yet)", treat as 0
+      if (text.includes("No one")) return 0;
+
+      return -1;
+    } catch {
+      return -1;
     }
   }
 

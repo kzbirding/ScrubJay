@@ -210,6 +210,28 @@ export class MeetupCommands {
 
   public constructor(private readonly board: MeetupBoardService) {}
 
+  // Board refresh throttling (avoid rebuilding on every RSVP click burst)
+  private boardRefreshTimer: NodeJS.Timeout | null = null;
+  private lastBoardRefreshAtMs = 0;
+  private readonly boardRefreshMinIntervalMs = 15_000;
+
+  private scheduleBoardRefresh(client: any) {
+    // If already scheduled, don't schedule another.
+    if (this.boardRefreshTimer) return;
+
+    const now = Date.now();
+    const sinceLast = now - this.lastBoardRefreshAtMs;
+    const delay = Math.max(0, this.boardRefreshMinIntervalMs - sinceLast);
+
+    this.boardRefreshTimer = setTimeout(async () => {
+      this.boardRefreshTimer = null;
+      this.lastBoardRefreshAtMs = Date.now();
+      await this.board.renderToBoard(client).catch((e) =>
+        this.logger.warn(`Board refresh failed (ok): ${e}`),
+      );
+    }, delay);
+  }
+
   private async getTrustedOrganizerStatus(
     interaction: any,
     userId: string | null,
@@ -908,6 +930,9 @@ public async onHistory(
       if (thread.archived && thread.locked) return;
 
       await this.upsertAttendanceMessage(thread, bi.guildId!, roleId);
+
+      // Update meetup board counts soon (throttled)
+      this.scheduleBoardRefresh(bi.client);
     } catch (e) {
       this.logger.warn(`Attendance update failed (ok): ${e}`);
     }
@@ -1300,7 +1325,11 @@ public async onReady([client]: [any]) {
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    this.logger.log("Meetup startup: attendance sync complete.");
+    this.logger.log("Meetup startup: attendance sync complete. Rendering board…");
+    await this.board.renderToBoard(client).catch((e) =>
+      this.logger.warn(`Startup board render failed (ok): ${e}`),
+    );
+    this.logger.log("Meetup startup: board render complete.");
   } catch (e) {
     this.logger.warn(`Startup attendance sync failed (ok): ${e}`);
   }
