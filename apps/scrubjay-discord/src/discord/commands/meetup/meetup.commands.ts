@@ -1241,41 +1241,47 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
   }
 
   // Parent message (meetup-board) — NO buttons, includes thread link once created
-  private buildMeetupPanelText(
-    options: MeetupCreateDto,
-    startUnix: number,
-    endUnix: number | undefined,
-    rsvpRoleId: string | null,
-    organizerId: string | null,
+private buildMeetupPanelText(
+  options: MeetupCreateDto,
+  startUnix: number,
+  endUnix: number | undefined,
+  rsvpRoleId: string | null,
+  organizerId: string | null,
   isTrustedOrganizer: boolean | null,
-    threadUrl: string | null,
-  ) {
-    const lines: string[] = [];
+  threadUrl: string | null,
+) {
+  const lines: string[] = [];
 
-    lines.push(`🗓️ **[${options.county}] ${options.title}**`);
-    lines.push(
-      `⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
-    );
-    lines.push(`📍 **Where:** ${options.location}`);
-    if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
+  lines.push(`🗓️ **[${options.county}] ${options.title}**`);
 
-    if (organizerId) {
-      lines.push(`🧑‍💼 **Organizer:** <@${organizerId}>`);
-      if (isTrustedOrganizer === true) {
-        lines.push(`☑️ Trusted Organizer`);
-      } else if (isTrustedOrganizer === false) {
-        lines.push(
-          `ℹ️ This organizer isn’t marked as a Trusted Organizer yet. Please use normal meetup best practices.`,
-        );
-      }
-      lines.push(`${ORGANIZER_TAG_PREFIX}${organizerId})`);
-    }
-
-    lines.push("");
-    lines.push(`✅ **RSVP using the buttons inside the meetup thread: ${threadUrl}**`);
-
-    return lines.join("\n");
+  const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID;
+  if (alertsRoleId) {
+    lines.push(`🔔 <@&${alertsRoleId}>`);
   }
+
+  lines.push(
+    `⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
+  );
+  lines.push(`📍 **Where:** ${options.location}`);
+  if (options.notes) lines.push(`📝 **Notes:** ${options.notes}`);
+
+  if (organizerId) {
+    lines.push(`🧑‍💼 **Organizer:** <@${organizerId}>`);
+    if (isTrustedOrganizer === true) {
+      lines.push(`☑️ Trusted Organizer`);
+    } else if (isTrustedOrganizer === false) {
+      lines.push(
+        `ℹ️ This organizer isn’t marked as a Trusted Organizer yet. Please use normal meetup best practices.`,
+      );
+    }
+    lines.push(`${ORGANIZER_TAG_PREFIX}${organizerId})`);
+  }
+
+  lines.push("");
+  lines.push(`✅ **RSVP using the buttons inside the meetup thread: ${threadUrl}**`);
+
+  return lines.join("\n");
+}
 
   // Thread RSVP message (buttons) — intentionally short to avoid repeating the parent message
   private buildThreadRsvpText(
