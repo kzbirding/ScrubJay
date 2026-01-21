@@ -1,18 +1,22 @@
 
 const MEETUP_HELP_TEXT = `
-**Meetups — quick guide 🌿**
+__**Meetups — quick guide 🌿**__
 
-• Use **/meetup create** to host a birding meetup. It'll open a thread for you and place your meetup on the meetup board 
-• In the thread, users can RSVP using the buttons in the pinned messages. This will automatically update the attendance list
+A) **Hosting a meetup**
+
+• Use **/meetup create** to host a birding meetup. It'll open a thread for you and place your meetup on the meetup board.
+• In the thread, users can RSVP using the buttons in the pinned messages. This will automatically update the attendance list.
 • A unique role is also created for your meetup, which you can mention for important updates.
 
-• Use **/meetup alerts** to toggle the meetup alerts role (get pinged when new meetups are posted).
-
-• Use **/meetup edit** within the meetup thread edit any aspect of the meetup title, date, time, etc.
+• Use **/meetup edit** within the meetup thread to edit any aspect of the meetup title, date, time, etc.
 • Use **/meetup cancel** within the meetup thread to cancel the meetup and notify all attendees.
 • Use **/meetup close** to mark a meetup as complete and archive it.
 
-If you’re unsure, it’s okay to ask in the thread 🙂
+B) **Joining a meetup**
+
+• Browse the meetup board channel for any upcoming events.
+• To RSVP, click on a thread and select the "Going" button in the pinned messages.
+• Use **/meetup alerts** in #meetups to toggle your meetup alerts on/off (get pinged when new meetups are posted).
 `;
 
 
