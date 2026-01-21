@@ -6,6 +6,8 @@ const MEETUP_HELP_TEXT = `
 • In the thread, users can RSVP using the buttons in the pinned messages. This will automatically update the attendance list
 • A unique role is also created for your meetup, which you can mention for important updates.
 
+• Use **/meetup alerts** to toggle the meetup alerts role (get pinged when new meetups are posted).
+
 • Use **/meetup edit** within the meetup thread edit any aspect of the meetup title, date, time, etc.
 • Use **/meetup cancel** within the meetup thread to cancel the meetup and notify all attendees.
 • Use **/meetup close** to mark a meetup as complete and archive it.
@@ -364,8 +366,11 @@ export class MeetupCommands {
         null, // thread link not available yet
       );
 
+      const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID;
+
       const starterMsg = await textChannel.send({
         content: initialParentText,
+        allowedMentions: alertsRoleId ? { roles: [alertsRoleId] } : undefined,
       });
 
       // 2) Create thread from the parent message
@@ -385,7 +390,13 @@ export class MeetupCommands {
         trustedStatus,
         thread.url,
       );
-      await starterMsg.edit({ content: finalParentText, components: [] }).catch(() => null);
+      await starterMsg
+        .edit({
+          content: finalParentText,
+          components: [],
+          allowedMentions: alertsRoleId ? { roles: [alertsRoleId] } : undefined,
+        })
+        .catch(() => null);
 
       // 2.5) Thread RSVP message (WITH BUTTONS) — keep this one short (parent has the details)
       const rsvpInThread = await thread.send({
@@ -1201,6 +1212,10 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     lines.push(`📌 **Meetup Panel** ${THREAD_PANEL_TAG}`);
     lines.push("");
     lines.push(`🗓️ **[${options.county}] ${options.title}**`);
+    const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID;
+    if (alertsRoleId) {
+      lines.push(`🔔 **Meetup alerts:** <@&${alertsRoleId}>`);
+    }
     lines.push(
       `⏰ **When:** <t:${startUnix}:f>${endUnix ? ` – <t:${endUnix}:t>` : ""}  (<t:${startUnix}:R>)`,
     );
@@ -1334,6 +1349,54 @@ public async onReady([client]: [any]) {
     this.logger.warn(`Startup attendance sync failed (ok): ${e}`);
   }
 }
+
+
+  @Subcommand({
+    name: "alerts",
+    description: "Toggle meetup alerts role on/off",
+  })
+  public async onAlerts(
+    @Context() [interaction]: SlashCommandContext,
+  ) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const roleId = process.env.MEETUP_ALERTS_ROLE_ID;
+    if (!roleId) {
+      return interaction.editReply(
+        "MEETUP_ALERTS_ROLE_ID is not set (Railway env var missing).",
+      );
+    }
+
+    if (!interaction.guild) {
+      return interaction.editReply("This command can only be used in a server.");
+    }
+
+    // Fetch member reliably (cache-safe)
+    const member = await interaction.guild.members
+      .fetch(interaction.user.id)
+      .catch(() => null);
+
+    if (!member) {
+      return interaction.editReply("Couldn’t find your server member record.");
+    }
+
+    const hasRole = member.roles.cache.has(roleId);
+
+    try {
+      if (!hasRole) {
+        await member.roles.add(roleId, "User toggled meetup alerts on");
+        return interaction.editReply("Meetup alerts toggled on ✅");
+      } else {
+        await member.roles.remove(roleId, "User toggled meetup alerts off");
+        return interaction.editReply("Meetup alerts toggled off ❌");
+      }
+    } catch {
+      return interaction.editReply(
+        "I couldn’t change that role. (Bot likely needs **Manage Roles** and its role must be above the meetup-alerts role.)",
+      );
+    }
+  }
+
 
 
   @Subcommand({
