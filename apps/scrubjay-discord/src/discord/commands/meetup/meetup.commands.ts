@@ -156,6 +156,47 @@ function getRoleIdFromText(content: string): string | null {
   return m?.[1] ?? null;
 }
 
+function getRoleIdFromEmbeds(msg: any): string | null {
+  try {
+    const embeds = msg?.embeds ?? [];
+    for (const e of embeds) {
+      const parts: string[] = [];
+      if (e?.title) parts.push(String(e.title));
+      if (e?.description) parts.push(String(e.description));
+
+      const fields = (e?.fields ?? []) as any[];
+      for (const f of fields) {
+        if (f?.name) parts.push(String(f.name));
+        if (f?.value) parts.push(String(f.value));
+      }
+
+      const joined = parts.join("\n");
+      const roleId = getRoleIdFromText(joined);
+      if (roleId) return roleId;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function embedTextIncludesTag(msg: any, tag: string): boolean {
+  try {
+    const embeds = msg?.embeds ?? [];
+    for (const e of embeds) {
+      if (String(e?.title ?? "").includes(tag)) return true;
+      if (String(e?.description ?? "").includes(tag)) return true;
+      for (const f of (e?.fields ?? [])) {
+        if (String(f?.name ?? "").includes(tag)) return true;
+        if (String(f?.value ?? "").includes(tag)) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function asMessageArray(pins: any): any[] {
   if (!pins) return [];
 
@@ -1132,20 +1173,24 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     const pinnedMessages = asMessageArray(pinsResp2);
     this.logger.debug(`[RSVP] Pinned messages in ${thread.id}: ${pinnedMessages.length}`);
 
-    // 1a) Prefer RSVP buttons in pinned messages
+    // 1a) Prefer RSVP roleId in pinned messages (buttons OR embed)
     for (const m of pinnedMessages) {
-      const roleId = getRoleIdFromMessageComponents(m);
+      const roleId = getRoleIdFromMessageComponents(m) ?? getRoleIdFromEmbeds(m);
       if (roleId) {
-        this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned buttons message ${m.id}`);
+        this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message ${m.id}`);
         return roleId;
       }
     }
 
-    // 1b) Fallback: pinned THREAD_PANEL_TAG contains <@&ROLEID>
+    // 1b) Fallback: pinned THREAD_PANEL_TAG contains <@&ROLEID> (in content OR embed)
     for (const m of pinnedMessages) {
       const content = m?.content ?? "";
-      if (content.includes("[SCRUBJAY_MEETUP_THREAD_PANEL]")) {
-        const roleId = getRoleIdFromText(content);
+      const hasTag =
+        content.includes("[SCRUBJAY_MEETUP_THREAD_PANEL]") ||
+        embedTextIncludesTag(m, "[SCRUBJAY_MEETUP_THREAD_PANEL]");
+
+      if (hasTag) {
+        const roleId = getRoleIdFromText(content) ?? getRoleIdFromEmbeds(m);
         if (roleId) {
           this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned THREAD_PANEL_TAG ${m.id}`);
           return roleId;
@@ -1164,9 +1209,9 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
         return roleIdFromButtons;
       }
 
-      const roleIdFromText = getRoleIdFromText(starter.content ?? "");
+      const roleIdFromText = getRoleIdFromText(starter.content ?? "") ?? getRoleIdFromEmbeds(starter);
       if (roleIdFromText) {
-        this.logger.debug(`[RSVP] Found roleId ${roleIdFromText} in starter text`);
+        this.logger.debug(`[RSVP] Found roleId ${roleIdFromText} in starter text/embed`);
         return roleIdFromText;
       }
     } else {
@@ -1179,17 +1224,17 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
       this.logger.debug(`[RSVP] Scanning recent messages in ${thread.id}`);
 
       for (const m of recent.values()) {
-        const roleId = getRoleIdFromMessageComponents(m);
+        const roleId = getRoleIdFromMessageComponents(m) ?? getRoleIdFromEmbeds(m);
         if (roleId) {
-          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message components`);
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message components/embed`);
           return roleId;
         }
       }
 
       for (const m of recent.values()) {
-        const roleId = getRoleIdFromText(m.content ?? "");
+        const roleId = getRoleIdFromText(m.content ?? "") ?? getRoleIdFromEmbeds(m);
         if (roleId) {
-          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message text`);
+          this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message text/embed`);
           return roleId;
         }
       }
