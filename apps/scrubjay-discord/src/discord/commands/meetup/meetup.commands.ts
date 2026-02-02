@@ -505,6 +505,8 @@ export class MeetupCommands {
       });
 
       await this.board.renderToBoard(interaction.client);
+      // Only notify the board channel (unread indicator) when a NEW meetup is created.
+      await this.board.postNewestEventAddedStatus(interaction.client).catch(() => null);
 
       return interaction.editReply(
         [
