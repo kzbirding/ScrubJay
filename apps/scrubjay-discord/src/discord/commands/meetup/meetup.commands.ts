@@ -980,12 +980,25 @@ public async onHistory(
       const guild = interaction.guild;
       if (!guild) return;
 
+      const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID ?? null;
+      if (alertsRoleId && roleId === alertsRoleId) {
+        // Safety: never delete the general meetup alerts role.
+        this.logger.warn(`[RSVP] Refusing to delete MEETUP_ALERTS_ROLE_ID (${roleId}).`);
+        return;
+      }
+
       const role = await guild.roles.fetch(roleId).catch(() => null);
       if (!role) return;
 
-      await role.delete("ScrubJay meetup ended/canceled").catch(() => null);
+      if ((role as any)?.managed) {
+        this.logger.warn(`[RSVP] Refusing to delete managed role ${roleId} (${role.name}).`);
+        return;
+      }
+
+      this.logger.debug(`[RSVP] Deleting meetup RSVP role ${roleId} (${role.name})`);
+      await role.delete("ScrubJay meetup ended/canceled");
     } catch (e) {
-      this.logger.warn(`RSVP role delete failed (ok): ${e}`);
+      this.logger.warn(`RSVP role delete failed: ${e}`);
     }
   }
 
@@ -1242,8 +1255,13 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
 
       const roleIdFromButtons = getRoleIdFromMessageComponents(starter);
       if (roleIdFromButtons) {
-        this.logger.debug(`[RSVP] Found roleId ${roleIdFromButtons} in starter message`);
-        return roleIdFromButtons;
+        // Never treat the general meetup alerts role as the meetup-specific RSVP role.
+        if (alertsRoleId && roleIdFromButtons === alertsRoleId) {
+          this.logger.debug(`[RSVP] Ignoring alerts roleId in starter message (${roleIdFromButtons})`);
+        } else {
+          this.logger.debug(`[RSVP] Found roleId ${roleIdFromButtons} in starter message`);
+          return roleIdFromButtons;
+        }
       }
 
       const roleIdFromText =
@@ -1251,8 +1269,12 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
         getRoleIdFromText(starter.content ?? "") ??
         getRoleIdFromEmbeds(starter);
       if (roleIdFromText) {
-        this.logger.debug(`[RSVP] Found roleId ${roleIdFromText} in starter text/embed`);
-        return roleIdFromText;
+        if (alertsRoleId && roleIdFromText === alertsRoleId) {
+          this.logger.debug(`[RSVP] Ignoring alerts roleId in starter text/embed (${roleIdFromText})`);
+        } else {
+          this.logger.debug(`[RSVP] Found roleId ${roleIdFromText} in starter text/embed`);
+          return roleIdFromText;
+        }
       }
     } else {
       this.logger.debug(`[RSVP] No starter message for ${thread.id}`);
