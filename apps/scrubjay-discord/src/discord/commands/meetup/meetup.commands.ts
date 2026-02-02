@@ -1176,6 +1176,10 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
   try {
     this.logger.debug(`[RSVP] Checking thread ${thread.id}`);
 
+    // The thread panel message can mention the general meetup alerts role. We must
+    // never treat that role mention as the meetup-specific RSVP role.
+    const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID ?? null;
+
     // 1) PINS FIRST (new design)
     const pinsResp = await (thread.messages as any).fetchPins?.().catch((e: any) => {
       this.logger.debug(`[RSVP] Failed to fetch pins for ${thread.id}: ${e}`);
@@ -1195,10 +1199,14 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
 
     // 1a) Prefer RSVP roleId in pinned messages (buttons OR embed)
     for (const m of pinnedMessages) {
+      // Prefer the button customId (most reliable) before scanning mentions.
       const roleId =
-        getRoleIdFromMentions(m) ??
         getRoleIdFromMessageComponents(m) ??
-        getRoleIdFromEmbeds(m);
+        getRoleIdFromEmbeds(m) ??
+        getRoleIdFromMentions(m);
+
+      if (roleId && alertsRoleId && roleId === alertsRoleId) continue;
+
       if (roleId) {
         this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned message ${m.id}`);
         return roleId;
@@ -1214,9 +1222,12 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
 
       if (hasTag) {
         const roleId =
-          getRoleIdFromMentions(m) ??
           getRoleIdFromText(content) ??
-          getRoleIdFromEmbeds(m);
+          getRoleIdFromEmbeds(m) ??
+          getRoleIdFromMentions(m);
+
+        if (roleId && alertsRoleId && roleId === alertsRoleId) continue;
+
         if (roleId) {
           this.logger.debug(`[RSVP] Found roleId ${roleId} in pinned THREAD_PANEL_TAG ${m.id}`);
           return roleId;
@@ -1257,6 +1268,9 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
           getRoleIdFromMentions(m) ??
           getRoleIdFromMessageComponents(m) ??
           getRoleIdFromEmbeds(m);
+
+        if (roleId && alertsRoleId && roleId === alertsRoleId) continue;
+
         if (roleId) {
           this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message components/embed`);
           return roleId;
@@ -1268,6 +1282,9 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
           getRoleIdFromMentions(m) ??
           getRoleIdFromText(m.content ?? "") ??
           getRoleIdFromEmbeds(m);
+
+        if (roleId && alertsRoleId && roleId === alertsRoleId) continue;
+
         if (roleId) {
           this.logger.debug(`[RSVP] Found roleId ${roleId} in recent message text/embed`);
           return roleId;
