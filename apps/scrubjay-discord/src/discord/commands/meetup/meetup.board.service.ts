@@ -6,6 +6,7 @@ import {
   type Message,
   type ThreadChannel,
 } from "discord.js";
+import { DateTime } from "luxon";
 
 export type MeetupStatus = "SCHEDULED" | "CANCELED" | "CLOSED";
 
@@ -24,6 +25,9 @@ export type StoredMeetup = {
 
 const BOARD_HEADER = "📌 Ongoing Meetup Threads";
 const BOARD_TAG = "[SCRUBJAY_MEETUP_BOARD]";
+
+// Single-line status message posted below the board (used to make the channel "unread")
+const STATUS_TAG = "[STATUS]";
 
 // These are the pinned-message tags inside meetup threads
 const THREAD_PANEL_TAG = "[SCRUBJAY_MEETUP_THREAD_PANEL]";
@@ -178,8 +182,22 @@ export class MeetupBoardService {
       );
     }
 
+    // Capture what the board currently lists so we can detect a NEW event addition.
+    const oldThreadIds = this.extractThreadIdsFromBoard(boardMsg.content ?? "");
+
     const content = this.buildBoardText();
+
+    // Identify new events BEFORE editing.
+    const ongoing = this.listOngoingThreads();
+    const newThreadIds = new Set<string>(ongoing.map((m) => m.threadId));
+    const hasNewEvent = this.hasAnyNewThread(oldThreadIds, newThreadIds);
+
     await boardMsg.edit({ content });
+
+    // Only post a status line when a NEW event is added (not on minor edits).
+    if (hasNewEvent) {
+      await this.replaceBoardStatusMessage(channel);
+    }
   }
 
   private listOngoingThreads(): StoredMeetup[] {
@@ -290,6 +308,43 @@ export class MeetupBoardService {
     }
   }
 
+
+  private extractThreadIdsFromBoard(content: string): Set<string> {
+    const ids = new Set<string>();
+
+    // thread.url typically looks like: https://discord.com/channels/{guildId}/{parentId}/{threadId}
+    const re = /discord\.com\/channels\/\d+\/\d+\/(\d+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content)) !== null) {
+      if (m[1]) ids.add(m[1]);
+    }
+
+    return ids;
+  }
+
+  private hasAnyNewThread(oldIds: Set<string>, newIds: Set<string>): boolean {
+    for (const id of newIds) {
+      if (!oldIds.has(id)) return true;
+    }
+    return false;
+  }
+
+  private async replaceBoardStatusMessage(channel: TextChannel): Promise<void> {
+    // Look back a small window; there should only ever be 0 or 1 status message.
+    const recent = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+    if (recent) {
+      const old = recent.find(
+        (m) => m.author?.id === channel.client.user?.id && (m.content ?? "").includes(STATUS_TAG),
+      );
+      if (old) {
+        await old.delete().catch(() => null);
+      }
+    }
+
+    const nowLA = DateTime.now().setZone("America/Los_Angeles");
+    const stamp = nowLA.toFormat("MMM d · h:mm a 'PT'");
+    await channel.send(`${STATUS_TAG} Newest event added at ${stamp}`).catch(() => null);
+  }
   private parsePanelText(text: string): { title?: string; location?: string; startUnix?: number } {
     const out: { title?: string; location?: string; startUnix?: number } = {};
 
