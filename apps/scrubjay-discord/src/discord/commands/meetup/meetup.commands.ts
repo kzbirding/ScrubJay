@@ -1194,20 +1194,9 @@ private async getRsvpRoleIdFromThread(thread: ThreadChannel): Promise<string | n
     const alertsRoleId = process.env.MEETUP_ALERTS_ROLE_ID ?? null;
 
     // 1) PINS FIRST (new design)
-    const pinsResp = await (thread.messages as any).fetchPins?.().catch((e: any) => {
-      this.logger.debug(`[RSVP] Failed to fetch pins for ${thread.id}: ${e}`);
-      return null;
-    });
-
-    // Some discord.js versions use fetchPinned() instead of fetchPins()
-    const pinsResp2 =
-      pinsResp ??
-      (await (thread.messages as any).fetchPinned?.().catch((e: any) => {
-        this.logger.debug(`[RSVP] Failed to fetch pinned for ${thread.id}: ${e}`);
-        return null;
-      }));
-
-    const pinnedMessages = asMessageArray(pinsResp2);
+    const pinnedMessages = await thread.messages.fetchPinned()
+  .then(p => Array.from(p.values()))
+  .catch(() => []);
     this.logger.debug(`[RSVP] Pinned messages in ${thread.id}: ${pinnedMessages.length}`);
 
     // 1a) Prefer RSVP roleId in pinned messages (buttons OR embed)
